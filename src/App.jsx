@@ -38,6 +38,30 @@ const DEFAULT_LAYOUT=[
   {id:"sonstiges",label:"Sonstiges",visible:true},
 ];
 let _layoutConfig=[...DEFAULT_LAYOUT];
+let _customPages=[];
+
+const KNOWN_FIELDS=[
+  {key:"firma",label:"Firma"},{key:"vorname",label:"Vorname"},
+  {key:"plz",label:"PLZ"},{key:"ort",label:"Ort"},
+  {key:"strasse",label:"Straße"},{key:"telefon",label:"Telefon"},
+  {key:"email",label:"E-Mail"},{key:"code",label:"Code"},
+  {key:"jahr",label:"Jahr"},{key:"restbetrag",label:"Restbetrag"},
+  {key:"bemerkungen_aktuell",label:"Bemerkungen aktuell"},
+  {key:"total_aktuell",label:"Total aktuell"},{key:"total_vorjahr",label:"Total Vorjahr"},
+  {key:"auslieferung_abholung",label:"Auslieferung/Abholung"},
+  {key:"ausgeliefert_am",label:"Ausgeliefert am"},
+  {key:"trans_txt",label:"Transport Text"},{key:"trans_preis",label:"Transport €"},
+  {key:"duenger_txt",label:"Dünger Text"},{key:"duenger_preis",label:"Dünger €"},
+  {key:"ortsteil",label:"Ortsteil"},{key:"lieferadresse",label:"Lieferadresse"},
+  {key:"kdr",label:"Kdr"},{key:"abholung",label:"Abholung"},
+  {key:"umtopfarbeiten",label:"Umtopfarbeiten"},{key:"vapiano_pflanzen",label:"Vapiano Pflanzen"},
+  {key:"camelia",label:"Camelia"},{key:"zeit_abholung",label:"Zeit Abholung"},
+  {key:"mail",label:"Mail"},{key:"ersatzpflanzen",label:"Ersatzpflanzen"},
+  {key:"rabatt_txt",label:"Rabatt Text"},{key:"gutschein",label:"Gutschein"},
+  {key:"transportdauer",label:"Transportdauer"},{key:"restpflanzen",label:"Restpflanzen"},
+];
+
+function snap(v){return Math.round(v/10)*10}
 
 function makeSb(){
   return{
@@ -853,6 +877,167 @@ function Tourenplanung({kunden,touren,setTouren,onSaveTour}){
   );
 }
 
+function CanvasPage({page,kundeData,onUpdate,onKundeChange}){
+  const[editMode,setEditMode]=useState(false);
+  const[fields,setFields]=useState(page.fields||[]);
+  const[showPalette,setShowPalette]=useState(false);
+  const[dragId,setDragId]=useState(null);
+  const[dragPos,setDragPos]=useState(null);
+  const fieldsRef=useRef(fields);
+  useEffect(()=>{const fs=page.fields||[];fieldsRef.current=fs;setFields(fs);},[page.id]);
+
+  const commit=(fs)=>{fieldsRef.current=fs;setFields([...fs]);onUpdate({...page,fields:fs});};
+  const startDrag=(e,id)=>{
+    if(!editMode)return;
+    e.preventDefault();
+    const f=fieldsRef.current.find(f=>f.id===id);
+    if(!f)return;
+    const origX=f.x,origY=f.y,sx=e.clientX,sy=e.clientY;
+    setDragId(id);setDragPos({x:origX,y:origY});
+    const onMove=(ev)=>{
+      setDragPos({x:snap(Math.max(0,origX+(ev.clientX-sx))),y:snap(Math.max(0,origY+(ev.clientY-sy)))});
+    };
+    const onUp=(ev)=>{
+      const x=snap(Math.max(0,origX+(ev.clientX-sx))),y=snap(Math.max(0,origY+(ev.clientY-sy)));
+      commit(fieldsRef.current.map(f=>f.id===id?{...f,x,y}:f));
+      setDragId(null);setDragPos(null);
+      document.removeEventListener("mousemove",onMove);
+      document.removeEventListener("mouseup",onUp);
+    };
+    document.addEventListener("mousemove",onMove);
+    document.addEventListener("mouseup",onUp);
+  };
+  const startResize=(e,id)=>{
+    if(!editMode)return;
+    e.preventDefault();e.stopPropagation();
+    const f=fieldsRef.current.find(f=>f.id===id);
+    if(!f)return;
+    const origW=f.w,sx=e.clientX;
+    const onMove=(ev)=>{
+      const w=snap(Math.max(80,origW+(ev.clientX-sx)));
+      setFields(fieldsRef.current.map(f=>f.id===id?{...f,w}:f));
+    };
+    const onUp=(ev)=>{
+      const w=snap(Math.max(80,origW+(ev.clientX-sx)));
+      commit(fieldsRef.current.map(f=>f.id===id?{...f,w}:f));
+      document.removeEventListener("mousemove",onMove);
+      document.removeEventListener("mouseup",onUp);
+    };
+    document.addEventListener("mousemove",onMove);
+    document.addEventListener("mouseup",onUp);
+  };
+  const getFieldPos=(f)=>dragId===f.id&&dragPos?dragPos:{x:f.x,y:f.y};
+  const getVal=(f)=>{
+    if(f.type==="bound"&&f.fieldKey)return kundeData?.[f.fieldKey]??"";
+    if(f.type==="formula")return evalFormula(f.formula||"0",kundeData?.positionen||[],kundeData?.felder||{});
+    return kundeData?.felder?.[f.id]??"";
+  };
+  const setVal=(f,v)=>{
+    if(!onKundeChange)return;
+    if(f.type==="bound"&&f.fieldKey)onKundeChange({...kundeData,[f.fieldKey]:v});
+    else onKundeChange({...kundeData,felder:{...(kundeData?.felder||{}),[f.id]:v}});
+  };
+  const addField=(kf)=>{
+    const id=uid();
+    const existing=fieldsRef.current;
+    const yOff=existing.length>0?Math.max(...existing.map(f=>f.y+(f.h||50)))+10:20;
+    const nf={id,type:kf.type,label:kf.label,fieldKey:kf.key||null,x:20,y:Math.min(yOff,600),w:200,h:50,formula:kf.formula||"",options:kf.options||""};
+    commit([...existing,nf]);
+    setShowPalette(false);
+  };
+  const renderFieldInput=(f)=>{
+    const val=getVal(f);
+    const base={...S.cell,width:"100%",boxSizing:"border-box"};
+    if(f.type==="formula")return<div style={{...base,background:"#ede9fe",color:"#5b21b6",fontWeight:700,fontFamily:"monospace",padding:"3px 6px",minHeight:22}}>{val}</div>;
+    if(f.type==="check")return<label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,cursor:"pointer",padding:"2px 0"}}><input type="checkbox"checked={!!val}onChange={e=>setVal(f,e.target.checked)}style={{width:14,height:14}}/><span>{f.label}</span></label>;
+    if(f.type==="select")return<select value={val}onChange={e=>setVal(f,e.target.value)}style={base}><option value="">–</option>{(f.options||"").split(",").map(o=><option key={o.trim()}value={o.trim()}>{o.trim()}</option>)}</select>;
+    if(f.type==="date"||f.fieldKey==="auslieferung_abholung"||f.fieldKey==="ausgeliefert_am")return<input type="date"value={val}onChange={e=>setVal(f,e.target.value)}style={base}/>;
+    if(f.type==="number")return<input type="number"value={val}onChange={e=>setVal(f,e.target.value)}style={{...base,textAlign:"right"}}/>;
+    const isMemo=f.type==="bound"&&f.fieldKey?.startsWith("bemerkungen");
+    if(isMemo)return<textarea value={val}onChange={e=>setVal(f,e.target.value)}rows={3}style={{...base,resize:"vertical"}}/>;
+    return<input type="text"value={val}onChange={e=>setVal(f,e.target.value)}style={base}/>;
+  };
+  const canvasH=Math.max(500,fields.length>0?Math.max(...fields.map(f=>f.y+(f.h||50)+50)):300);
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,padding:"3px 10px",background:"#e0e0d8",borderBottom:"1px solid #ccc",flexShrink:0}}>
+        <span style={{fontWeight:700,fontSize:13,color:"#333"}}>{page.name}</span>
+        <div style={{flex:1}}/>
+        {editMode&&<button onClick={()=>setShowPalette(true)}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:5,padding:"2px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>+ Feld hinzufügen</button>}
+        {editMode&&<span style={{fontSize:10,color:"#94a3b8"}}>Blau = ziehen · ◀▶ = Breite</span>}
+        <button onClick={()=>setEditMode(m=>!m)}style={{background:editMode?"#f59e0b":"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>
+          {editMode?"✓ Fertig":"✏ Bearbeiten"}
+        </button>
+      </div>
+      <div style={{flex:1,overflow:"auto",padding:16,background:"#e0ddd8"}}>
+        <div style={{position:"relative",width:860,minHeight:canvasH,background:"#fff",border:"1px solid #bbb",
+          backgroundImage:editMode?"radial-gradient(circle,#bbb 1px,transparent 1px)":"none",backgroundSize:"10px 10px"}}>
+          {fields.map(f=>{
+            const{x,y}=getFieldPos(f);
+            return(
+              <div key={f.id}style={{position:"absolute",left:x,top:y,width:f.w,userSelect:"none",
+                zIndex:dragId===f.id?100:1,boxShadow:dragId===f.id?"0 8px 24px rgba(0,0,0,.25)":"none"}}>
+                {editMode&&(
+                  <div onMouseDown={e=>startDrag(e,f.id)}
+                    style={{background:"#6366f1",color:"#fff",fontSize:9,padding:"2px 5px",cursor:"grab",
+                      display:"flex",justifyContent:"space-between",alignItems:"center",
+                      borderRadius:"3px 3px 0 0",userSelect:"none"}}>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,fontWeight:700}}>{f.label}</span>
+                    <button onMouseDown={e=>e.stopPropagation()}onClick={()=>commit(fieldsRef.current.filter(ff=>ff.id!==f.id))}
+                      style={{background:"none",border:"none",color:"#fca5a5",cursor:"pointer",fontSize:12,lineHeight:1,padding:"0 2px",flexShrink:0}}>×</button>
+                  </div>
+                )}
+                {!editMode&&f.type!=="check"&&<div style={{...S.label,marginBottom:1}}>{f.label}</div>}
+                <div style={{position:"relative"}}>
+                  {renderFieldInput(f)}
+                  {editMode&&<div onMouseDown={e=>startResize(e,f.id)}
+                    style={{position:"absolute",right:0,top:0,bottom:0,width:6,cursor:"ew-resize",background:"rgba(99,102,241,.3)",borderRadius:"0 2px 2px 0"}}/>}
+                </div>
+              </div>
+            );
+          })}
+          {fields.length===0&&editMode&&(
+            <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"#94a3b8",fontSize:13,pointerEvents:"none",flexDirection:"column",gap:8}}>
+              <div style={{fontSize:32}}>🖼</div>
+              <div>Klicke "+ Feld hinzufügen" um Felder auf der Seite zu platzieren</div>
+            </div>
+          )}
+        </div>
+      </div>
+      {showPalette&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1200}}>
+          <div style={{background:"#fff",borderRadius:14,width:580,maxHeight:"82vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
+            <div style={{display:"flex",alignItems:"center",padding:"14px 20px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2}}>
+              <span style={{fontWeight:700,fontSize:15,flex:1}}>Feld auf Seite legen</span>
+              <button onClick={()=>setShowPalette(false)}style={{background:"#f1f5f9",border:"none",borderRadius:7,width:28,height:28,cursor:"pointer",fontSize:16,color:"#555"}}>×</button>
+            </div>
+            <div style={{padding:16}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#374151",marginBottom:8,textTransform:"uppercase",letterSpacing:".05em"}}>Bestehende Felder (Kundendaten)</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:20}}>
+                {KNOWN_FIELDS.map(kf=>(
+                  <button key={kf.key}onClick={()=>addField({...kf,type:"bound"})}
+                    style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#0369a1",fontWeight:500}}>
+                    {kf.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{fontSize:11,fontWeight:700,color:"#374151",marginBottom:8,textTransform:"uppercase",letterSpacing:".05em"}}>Neue eigene Felder</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {FIELD_TYPES.map(ft=>(
+                  <button key={ft.type}onClick={()=>addField({label:ft.label,type:ft.type,key:null})}
+                    style={{background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:6,padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#6d28d9",display:"flex",alignItems:"center",gap:4,fontWeight:500}}>
+                    <span style={{fontWeight:700}}>{ft.icon}</span>{ft.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App(){
   const[connected,setConnected]=useState(false);
   const[kunden,setKunden]=useState([]);
@@ -865,6 +1050,7 @@ export default function App(){
   const[modal,setModal]=useState(null);
   const[formulaMap,setFormulaMap]=useState({});
   const[layout,setLayout]=useState([...DEFAULT_LAYOUT]);
+  const[customPages,setCustomPages]=useState([]);
   const[page,setPage]=useState("stammblatt");
   const[err,setErr]=useState(null);
   const sbRef=useRef(sb);
@@ -878,6 +1064,7 @@ export default function App(){
       setFormulaMap({..._posFormulaMap});
       setLayout([..._layoutConfig]);
       setTouren(_touren);
+      setCustomPages([..._customPages]);
       if(_kunden.length){setActiveId(_kunden[0].id);loadKunde(_kunden[0].id);}
     }catch(e){setErr(e.message)}
     finally{setLoading(false)}
@@ -945,6 +1132,30 @@ export default function App(){
     setLayout([...l]);
   };
 
+  const addCustomPage=()=>{
+    const id="cp_"+uid();
+    const np={id,name:"Neue Seite",fields:[]};
+    _customPages=[..._customPages,np];
+    setCustomPages([..._customPages]);
+    setPage(id);
+  };
+
+  const updateCustomPage=(updated)=>{
+    _customPages=_customPages.map(p=>p.id===updated.id?updated:p);
+    setCustomPages([..._customPages]);
+  };
+
+  const deleteCustomPage=(id)=>{
+    _customPages=_customPages.filter(p=>p.id!==id);
+    setCustomPages([..._customPages]);
+    if(page===id)setPage("stammblatt");
+  };
+
+  const renameCustomPage=(id,name)=>{
+    _customPages=_customPages.map(p=>p.id===id?{...p,name}:p);
+    setCustomPages([..._customPages]);
+  };
+
   const saveTour=async(tour)=>{
     const saved={...tour,id:tour.id||uid()};
     const idx=_touren.findIndex(t=>t.id===saved.id);
@@ -967,6 +1178,17 @@ export default function App(){
               <span>{ic}</span>{l}
             </button>
           ))}
+          {customPages.map(cp=>(
+            <div key={cp.id}style={{display:"flex",alignItems:"center",gap:2}}>
+              <button onClick={()=>setPage(cp.id)}style={{background:page===cp.id?"rgba(99,102,241,.25)":"transparent",color:page===cp.id?"#a5b4fc":"#888",border:"none",borderRadius:6,padding:"5px 8px",fontSize:11,cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:5,fontWeight:page===cp.id?700:400,flex:1,overflow:"hidden"}}>
+                <span>🖼</span><span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cp.name}</span>
+              </button>
+              <button onClick={()=>deleteCustomPage(cp.id)}title="Seite löschen"style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:11,padding:"2px 4px",flexShrink:0}}>×</button>
+            </div>
+          ))}
+          <button onClick={addCustomPage}style={{background:"transparent",color:"#555",border:"1px dashed #444",borderRadius:6,padding:"4px 8px",fontSize:10,cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:5,marginTop:2}}>
+            <span>+</span>Neue Seite
+          </button>
         </div>
         <div style={{padding:"6px 6px",flex:1,overflowY:"auto"}}>
           <div style={{fontSize:9,fontWeight:700,color:"#4ade80",textTransform:"uppercase",letterSpacing:".08em",padding:"4px 6px"}}>Datensätze ({kunden.length})</div>
@@ -992,10 +1214,22 @@ export default function App(){
           {err&&<span style={{fontSize:11,color:"#cc0000",background:"#ffe0e0",padding:"2px 8px",borderRadius:4}}>⚠ {err}</span>}
           <span style={{fontSize:11,background:"#fff",border:"1px solid #888",padding:"2px 8px"}}>Datensätze: {kunden.length}</span>
         </div>
-        <div style={{background:"#d4d0c8",borderBottom:"1px solid #888",padding:"0 10px",display:"flex",alignItems:"flex-end",flexShrink:0}}>
-          <div style={{background:"#f0ede8",border:"1px solid #888",borderBottom:"none",padding:"4px 16px",fontSize:12,fontWeight:700}}>STAM</div>
+        <div style={{background:"#d4d0c8",borderBottom:"1px solid #888",padding:"0 10px",display:"flex",alignItems:"flex-end",flexShrink:0,gap:2}}>
+          {page==="stammblatt"&&<div style={{background:"#f0ede8",border:"1px solid #888",borderBottom:"none",padding:"4px 16px",fontSize:12,fontWeight:700}}>STAM</div>}
+          {page==="touren"&&<div style={{background:"#f0ede8",border:"1px solid #888",borderBottom:"none",padding:"4px 16px",fontSize:12,fontWeight:700}}>TOUR</div>}
+          {customPages.map(cp=>(
+            <div key={cp.id}style={{display:"flex",alignItems:"center",gap:0}}>
+              <div style={{background:page===cp.id?"#f0ede8":"#ddd",border:"1px solid #888",borderBottom:page===cp.id?"none":"1px solid #888",padding:"4px 6px",fontSize:12,fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                {page===cp.id
+                  ?<input value={cp.name}onChange={e=>renameCustomPage(cp.id,e.target.value)}
+                      style={{background:"transparent",border:"none",fontWeight:700,fontSize:12,outline:"none",width:Math.max(40,cp.name.length*8)}}/>
+                  :<span onClick={()=>setPage(cp.id)}style={{cursor:"pointer"}}>{cp.name}</span>
+                }
+              </div>
+            </div>
+          ))}
         </div>
-        <div style={{flex:1,overflow:"auto",background:"#e0ddd8",padding:"8px 10px"}}>
+        <div style={{flex:1,overflow:page.startsWith("cp_")?"hidden":"auto",background:"#e0ddd8",padding:page.startsWith("cp_")?"0":"8px 10px",display:page.startsWith("cp_")?"flex":"block",flexDirection:"column"}}>
           {loading?(
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#555",fontSize:14}}>Lade…</div>
           ):page==="stammblatt"?(
@@ -1004,8 +1238,17 @@ export default function App(){
             ):(
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Datensatz auswählen oder + Neu</div>
             )
-          ):(
+          ):page==="touren"?(
             <Tourenplanung kunden={kunden}touren={touren}setTouren={setTouren}onSaveTour={saveTour}/>
+          ):page.startsWith("cp_")?(()=>{
+            const cp=customPages.find(p=>p.id===page);
+            return cp?(
+              <CanvasPage page={cp}kundeData={activeData}onUpdate={updateCustomPage}onKundeChange={setActiveData}/>
+            ):(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Seite nicht gefunden</div>
+            );
+          })():(
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Unbekannte Seite</div>
           )}
         </div>
         <div style={{background:"#c0c0b8",borderTop:"1px solid #888",padding:"2px 10px",display:"flex",alignItems:"center",gap:10,fontSize:11,flexShrink:0}}>
