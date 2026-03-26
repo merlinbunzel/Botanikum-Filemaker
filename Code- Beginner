@@ -1,0 +1,959 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+// ═══════════════════════════════════════════════════════════════
+//  ⚙️  SUPABASE KONFIGURATION  – hier deine Zugangsdaten eintragen
+// ═══════════════════════════════════════════════════════════════
+const SUPABASE_URL  = "https://DEIN-PROJEKT.supabase.co";
+const SUPABASE_ANON = "DEIN-ANON-KEY";
+// ═══════════════════════════════════════════════════════════════
+
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
+
+// ─── HELPERS ──────────────────────────────────────────────────
+const YEAR = new Date().getFullYear();
+const TODAY = new Date().toISOString().split("T")[0];
+function fmt2(n) { return isNaN(n)||n===null ? "0,00" : Number(n).toFixed(2).replace(".",","); }
+
+function uid() { return Math.random().toString(36).slice(2,10); }
+
+const S = {
+  cell:   { border:"1px solid #bbb",background:"#fff",padding:"2px 5px",fontSize:12,color:"#111",outline:"none",fontFamily:"inherit",width:"100%",boxSizing:"border-box" },
+  label:  { fontSize:10,color:"#444",fontWeight:600,whiteSpace:"nowrap",paddingTop:2 },
+  green:  { background:"#00cc00",color:"#fff",fontWeight:700 },
+  yellow: { background:"#ffff00",color:"#000" },
+  cyan:   { background:"#00ffff",color:"#000" },
+  pink:   { background:"#ff99cc",color:"#000" },
+  red:    { background:"#ff3333",color:"#fff",fontWeight:700 },
+};
+
+// ─── SUPABASE DATA LAYER ──────────────────────────────────────
+
+async function fetchKunden() {
+  const { data, error } = await sb.from("kunden").select("*").order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+async function fetchPositionen(kundeId) {
+  const { data, error } = await sb.from("positionen").select("*").eq("kunde_id", kundeId).order("sort_order");
+  if (error) throw error;
+  return data || [];
+}
+
+async function fetchKundeFelder(kundeId) {
+  const { data, error } = await sb.from("kunden_felder").select("*").eq("kunde_id", kundeId);
+  if (error) throw error;
+  const map = {};
+  (data || []).forEach(r => { map[r.feld_id] = r.wert; });
+  return map;
+}
+
+async function fetchSchema() {
+  const { data, error } = await sb.from("formular_felder").select("*").order("sort_order");
+  if (error) throw error;
+  return data || [];
+}
+
+async function fetchTouren() {
+  const { data, error } = await sb.from("touren").select("*, tour_kunden(kunde_id)").order("datum");
+  if (error) throw error;
+  return (data || []).map(t => ({ ...t, kundenIds: (t.tour_kunden||[]).map(r=>r.kunde_id) }));
+}
+
+async function upsertKunde(kunde) {
+  const { positionen: _, felder: __, ...k } = kunde;
+  const { data, error } = await sb.from("kunden").upsert(k, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+async function upsertPositionen(kundeId, positionen) {
+  // delete existing, re-insert
+  await sb.from("positionen").delete().eq("kunde_id", kundeId);
+  if (!positionen.length) return;
+  const rows = positionen.map((p, i) => ({
+    kunde_id: kundeId,
+    label: p.label,
+    sort_order: i,
+    art: p.art || null,
+    anzahl: p.anzahl || null,
+    cm: p.cm ? parseFloat(p.cm) : null,
+    preis: p.preis ? parseFloat(p.preis) : null,
+  }));
+  const { error } = await sb.from("positionen").insert(rows);
+  if (error) throw error;
+}
+
+async function upsertKundeFelder(kundeId, felder) {
+  const rows = Object.entries(felder).map(([feld_id, wert]) => ({ kunde_id: kundeId, feld_id, wert: String(wert||"") }));
+  if (!rows.length) return;
+  const { error } = await sb.from("kunden_felder").upsert(rows, { onConflict: "kunde_id,feld_id" });
+  if (error) throw error;
+}
+
+async function deleteKunde(id) {
+  const { error } = await sb.from("kunden").delete().eq("id", id);
+  if (error) throw error;
+}
+
+async function upsertSchema(fields) {
+  await sb.from("formular_felder").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+  if (!fields.length) return;
+  const { error } = await sb.from("formular_felder").insert(fields.map((f,i) => ({ ...f, sort_order: i })));
+  if (error) throw error;
+}
+
+async function upsertTour(tour) {
+  const { kundenIds: _, tour_kunden: __, ...t } = tour;
+  const { data, error } = await sb.from("touren").upsert(t, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  // sync tour_kunden
+  await sb.from("tour_kunden").delete().eq("tour_id", data.id);
+  if (tour.kundenIds?.length) {
+    const rows = tour.kundenIds.map((kid, i) => ({ tour_id: data.id, kunde_id: kid, sort_order: i }));
+    await sb.from("tour_kunden").insert(rows);
+  }
+  return data;
+}
+
+async function deleteTour(id) {
+  const { error } = await sb.from("touren").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ─── FORMULA ENGINE ────────────────────────────────────────────
+
+function evalFormula(formula, positionen, felder) {
+  try {
+    const ctx = {};
+    Object.entries(felder || {}).forEach(([k,v]) => { ctx[k] = parseFloat(v)||0; });
+    ctx.ANZAHL_GESAMT = (positionen||[]).reduce((s,p)=>s+(parseFloat(p.anzahl)||0),0);
+    ctx.PREIS_GESAMT  = (positionen||[]).reduce((s,p)=>s+(parseFloat(p.preis)||0),0);
+    ctx.ARTEN_ANZAHL  = (positionen||[]).filter(p=>p.art).length;
+    let expr = formula
+      .replace(/SUM\(([^)]+)\)/gi, (_,a) => a.split(",").map(x=>ctx[x.trim()]||0).reduce((s,v)=>s+v,0))
+      .replace(/AVG\(([^)]+)\)/gi, (_,a) => { const vs=a.split(",").map(x=>ctx[x.trim()]||0); return vs.reduce((s,v)=>s+v,0)/vs.length; })
+      .replace(/[A-Z_][A-Z0-9_]*/g, m => ctx[m]!==undefined ? ctx[m] : m);
+    // eslint-disable-next-line no-new-func
+    const r = new Function(`"use strict";return(${expr})`)();
+    return isFinite(r) ? Math.round(r*100)/100 : "Fehler";
+  } catch { return "Fehler"; }
+}
+
+// ─── INPUT HELPERS ─────────────────────────────────────────────
+
+function Inp({ value, onChange, style={}, type="text", rows, readOnly }) {
+  const base = { ...S.cell, ...style };
+  if (rows) return <textarea value={value||""} onChange={e=>onChange&&onChange(e.target.value)} rows={rows} style={{ ...base,resize:"vertical" }} readOnly={readOnly} />;
+  return <input type={type} value={value||""} onChange={e=>onChange&&onChange(e.target.value)} style={base} readOnly={readOnly} />;
+}
+
+function Row({ children }) {
+  return <div style={{ display:"flex",alignItems:"flex-start",gap:4,marginBottom:3 }}>{children}</div>;
+}
+
+function Lbl({ t, ml }) {
+  return <span style={{ ...S.label,marginLeft:ml,minWidth:"max-content",paddingTop:3 }}>{t}</span>;
+}
+
+// ─── SETUP SCREEN ─────────────────────────────────────────────
+
+function SetupScreen({ onConnect }) {
+  const [url,  setUrl]  = useState("");
+  const [key,  setKey]  = useState("");
+  const [err,  setErr]  = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const connect = async () => {
+    if (!url || !key) { setErr("Bitte beide Felder ausfüllen."); return; }
+    setBusy(true); setErr("");
+    try {
+      const client = createClient(url.trim(), key.trim());
+      const { error } = await client.from("kunden").select("id").limit(1);
+      if (error) throw error;
+      onConnect(url.trim(), key.trim());
+    } catch(e) {
+      setErr("Verbindung fehlgeschlagen: " + (e?.message||String(e)));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ minHeight:"100vh",background:"#052e16",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Arial,sans-serif" }}>
+      <div style={{ background:"#fff",borderRadius:16,padding:36,width:480,boxShadow:"0 24px 80px rgba(0,0,0,.5)" }}>
+        <div style={{ textAlign:"center",marginBottom:24 }}>
+          <div style={{ fontSize:36,marginBottom:8 }}>🌿</div>
+          <div style={{ fontWeight:800,fontSize:22,color:"#052e16" }}>Botanikum Stammblatt</div>
+          <div style={{ fontSize:13,color:"#64748b",marginTop:4 }}>Supabase Verbindung einrichten</div>
+        </div>
+        <div style={{ marginBottom:14 }}>
+          <label style={{ fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:4 }}>Supabase Project URL</label>
+          <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://xxxx.supabase.co"
+            style={{ width:"100%",padding:"10px 12px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box" }} />
+        </div>
+        <div style={{ marginBottom:14 }}>
+          <label style={{ fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:4 }}>Anon/Public Key</label>
+          <input value={key} onChange={e=>setKey(e.target.value)} placeholder="eyJhbG..."
+            style={{ width:"100%",padding:"10px 12px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box",fontFamily:"monospace" }} />
+        </div>
+        {err && <div style={{ background:"#fee2e2",color:"#b91c1c",borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12 }}>{err}</div>}
+        <button onClick={connect} disabled={busy}
+          style={{ width:"100%",background:"#059669",color:"#fff",border:"none",borderRadius:9,padding:"12px",fontSize:15,cursor:"pointer",fontWeight:700 }}>
+          {busy ? "Verbinde…" : "Verbinden & starten"}
+        </button>
+        <div style={{ marginTop:16,background:"#f0fdf4",borderRadius:9,padding:"12px 14px",fontSize:12,color:"#374151" }}>
+          <strong>SQL-Setup noch nicht ausgeführt?</strong><br/>
+          Lade zuerst <code style={{ background:"#d1fae5",padding:"1px 5px",borderRadius:3" }}>botanikum_supabase_setup.sql</code> in den Supabase SQL-Editor hoch.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── POSITIONEN EDITOR ────────────────────────────────────────
+
+function PositionenEditor({ positionen, onChange }) {
+  const setPos = (i, k, v) => {
+    const p = [...positionen];
+    p[i] = { ...p[i], [k]: v };
+    onChange(p);
+  };
+  const sumCm    = positionen.reduce((s,p)=>s+(parseFloat(p.cm)||0),0);
+  const sumPreis = positionen.reduce((s,p)=>s+(parseFloat(p.preis)||0),0);
+
+  return (
+    <div>
+      <div style={{ display:"flex",gap:0,background:"#ddd",border:"1px solid #999",borderBottom:"none" }}>
+        {[["Pos",.4],["Pflanzenart / Beschreibung",4],["cm",1],["€-Preis",1]].map(([h,f])=>(
+          <div key={h} style={{ flex:f,padding:"3px 6px",fontWeight:700,fontSize:10,borderRight:"1px solid #999",background:"#e8e8e0" }}>{h}</div>
+        ))}
+      </div>
+      {positionen.map((p,i)=>(
+        <div key={i} style={{ display:"flex",gap:0,border:"1px solid #ccc",borderTop:"none",background:i%2===0?"#fff":"#f9f9f0" }}>
+          <div style={{ flex:.4,padding:"1px 5px",borderRight:"1px solid #ccc",fontSize:11,fontWeight:700,color:"#555",display:"flex",alignItems:"center",minWidth:26 }}>{p.label}</div>
+          <div style={{ flex:4,borderRight:"1px solid #ccc" }}>
+            <input value={p.art||""} onChange={e=>setPos(i,"art",e.target.value)} style={{ ...S.cell,border:"none",background:"transparent" }} />
+          </div>
+          <div style={{ flex:1,borderRight:"1px solid #ccc" }}>
+            <input type="number" value={p.cm||""} onChange={e=>setPos(i,"cm",e.target.value)} style={{ ...S.cell,border:"none",background:"transparent",textAlign:"right" }} />
+          </div>
+          <div style={{ flex:1 }}>
+            <input type="number" value={p.preis||""} onChange={e=>setPos(i,"preis",e.target.value)} style={{ ...S.cell,border:"none",background:"transparent",textAlign:"right" }} />
+          </div>
+        </div>
+      ))}
+      <div style={{ display:"flex",border:"1px solid #ccc",borderTop:"none",background:"#e8e8d0",fontWeight:700,fontSize:11 }}>
+        <div style={{ flex:.4,padding:"3px 5px",borderRight:"1px solid #ccc" }} />
+        <div style={{ flex:4,padding:"3px 8px",borderRight:"1px solid #ccc" }}>Summe</div>
+        <div style={{ flex:1,padding:"3px 6px",borderRight:"1px solid #ccc",textAlign:"right" }}>{sumCm} cm</div>
+        <div style={{ flex:1,padding:"3px 6px",textAlign:"right" }}>{fmt2(sumPreis)} €</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── STAMMBLATT ───────────────────────────────────────────────
+
+function Stammblatt({ data, schema, onChange, onSave, saving }) {
+  const set = (k,v) => onChange({ ...data, [k]:v });
+  const setPos = (pos) => onChange({ ...data, positionen: pos });
+  const setFelder = (felder) => onChange({ ...data, felder });
+
+  const pos = data.positionen || [];
+  const felder = data.felder || {};
+  const rabattFak  = parseFloat(data.rabatt_xf)||1;
+  const sumPreis   = pos.reduce((s,p)=>s+(parseFloat(p.preis)||0),0);
+  const transPreis = parseFloat(data.trans_preis)||0;
+  const duengerP   = parseFloat(data.duenger_preis)||0;
+  const endsummeO  = (sumPreis/rabattFak) + transPreis + duengerP;
+  const endsumme   = endsummeO * 1.19;
+
+  const renderCustomField = (f) => {
+    const val = felder[f.field_id] || "";
+    const base = { ...S.cell };
+    if (f.type==="formula") {
+      const result = evalFormula(f.formula||"0", pos, felder);
+      return <div style={{ ...base,background:"#ede9fe",color:"#5b21b6",fontWeight:700,fontFamily:"monospace",padding:"3px 6px" }}>{f.prefix||""}{result}{f.suffix||""}</div>;
+    }
+    if (f.type==="number") return (
+      <div style={{ display:"flex",alignItems:"center",gap:3 }}>
+        {f.prefix&&<span style={{ fontSize:11,color:"#666" }}>{f.prefix}</span>}
+        <input type="number" value={val} onChange={e=>setFelder({...felder,[f.field_id]:e.target.value})} style={base} />
+        {f.suffix&&<span style={{ fontSize:11,color:"#666" }}>{f.suffix}</span>}
+      </div>
+    );
+    if (f.type==="select") return (
+      <select value={val} onChange={e=>setFelder({...felder,[f.field_id]:e.target.value})} style={base}>
+        <option value="">–</option>
+        {(f.options||"").split(",").map(o=><option key={o.trim()}>{o.trim()}</option>)}
+      </select>
+    );
+    if (f.type==="check") return (
+      <label style={{ display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12 }}>
+        <input type="checkbox" checked={!!val} onChange={e=>setFelder({...felder,[f.field_id]:e.target.checked})} style={{ width:14,height:14 }} />
+        <span>{f.label}</span>
+      </label>
+    );
+    if (f.type==="date") return <input type="date" value={val} onChange={e=>setFelder({...felder,[f.field_id]:e.target.value})} style={base} />;
+    return <input type="text" value={val} onChange={e=>setFelder({...felder,[f.field_id]:e.target.value})} style={base} />;
+  };
+
+  return (
+    <div style={{ background:"#f5f5f0",padding:"10px 14px",fontFamily:"Arial,sans-serif",minWidth:860,fontSize:12 }}>
+
+      {/* Erstellungszeit */}
+      <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:4,background:"#e0e0d8",padding:"3px 8px",border:"1px solid #ccc" }}>
+        <span style={S.label}>Erstellungszeit</span>
+        <input value={TODAY} readOnly style={{ ...S.cell,width:100 }} />
+        <span style={S.label}>{new Date().toTimeString().slice(0,8)}</span>
+        <div style={{ flex:1 }} />
+        {saving && <span style={{ fontSize:11,color:"#059669",fontWeight:700 }}>💾 Speichern…</span>}
+        <button onClick={onSave} style={{ background:"#059669",color:"#fff",border:"none",borderRadius:6,padding:"3px 14px",fontSize:12,cursor:"pointer",fontWeight:700 }}>Speichern</button>
+      </div>
+
+      {/* Jahr + Kopf */}
+      <div style={{ display:"flex",gap:6,marginBottom:4,alignItems:"flex-start",flexWrap:"wrap" }}>
+        <div style={{ background:"#cc0000",border:"2px solid #990000",padding:"4px 8px" }}>
+          <input value={data.jahr||YEAR} onChange={e=>set("jahr",e.target.value)}
+            style={{ background:"#cc0000",border:"none",color:"#fff",fontWeight:800,fontSize:20,width:60,outline:"none",textAlign:"center" }} />
+        </div>
+        <div style={{ display:"flex",flexDirection:"column",gap:3,flex:1 }}>
+          <Row>
+            <Lbl t="Restbetrag"/><Inp value={data.restbetrag} onChange={v=>set("restbetrag",v)} style={{ width:80 }}/>
+            <Lbl t="Code" ml={8}/><Inp value={data.code} onChange={v=>set("code",v)} style={{ width:90 }}/>
+            <Lbl t="zugesagt" ml={8}/>
+            <input type="checkbox" checked={!!data.zugesagt} onChange={e=>set("zugesagt",e.target.checked)} style={{ width:16,height:16,marginTop:3 }}/>
+          </Row>
+          <Row>
+            <Lbl t="Auslieferung/Abholung"/>
+            <Inp value={data.auslieferung_abholung} onChange={v=>set("auslieferung_abholung",v)} type="date" style={{ width:130 }}/>
+            <Inp value={data.abholung} onChange={v=>set("abholung",v)} style={{ ...S.yellow,width:80 }}/>
+            <Lbl t="Umtopfarbeiten" ml={8}/>
+            <Inp value={data.umtopfarbeiten} onChange={v=>set("umtopfarbeiten",v)} style={{ ...S.green,width:100 }}/>
+          </Row>
+        </div>
+        <div style={{ display:"flex",flexDirection:"column",gap:3,marginLeft:"auto" }}>
+          <Row><Lbl t="Osteria"/><Inp value={data.osteria} onChange={v=>set("osteria",v)} style={{ ...S.green,width:110 }}/></Row>
+          <Row><Lbl t="Vapiano"/><Inp value={data.vapiano} onChange={v=>set("vapiano",v)} style={{ ...S.green,width:110 }}/></Row>
+          <Row><span style={{ ...S.label }}>TOTAL {YEAR}</span><Inp value={data.total_aktuell} onChange={v=>set("total_aktuell",v)} style={{ ...S.yellow,width:60,textAlign:"center" }}/></Row>
+        </div>
+      </div>
+
+      {/* Adresse + Rechts */}
+      <div style={{ display:"flex",gap:0,marginBottom:4,border:"1px solid #bbb",background:"#fff" }}>
+        <div style={{ flex:2,padding:"5px 8px",borderRight:"1px solid #ccc" }}>
+          <Row><Lbl t="Firma"/><Inp value={data.firma} onChange={v=>set("firma",v)} /></Row>
+          <Row><Lbl t="Vorname"/><Inp value={data.vorname} onChange={v=>set("vorname",v)} style={{ width:140 }}/></Row>
+          <Row><Lbl t="PLZ"/><Inp value={data.plz} onChange={v=>set("plz",v)} style={{ width:55 }}/><Lbl t="Ort" ml={4}/><Inp value={data.ort} onChange={v=>set("ort",v)} style={{ width:110 }}/></Row>
+          <Row><Lbl t="Straße"/><Inp value={data.strasse} onChange={v=>set("strasse",v)} /></Row>
+          <Row><Lbl t="Telefon"/><Inp value={data.telefon} onChange={v=>set("telefon",v)} rows={2} /></Row>
+        </div>
+        <div style={{ flex:2,padding:"5px 8px",borderRight:"1px solid #ccc" }}>
+          <Row><Lbl t="Ortsteil"/><Inp value={data.ortsteil} onChange={v=>set("ortsteil",v)} style={{ width:55 }}/><Lbl t="E-Mail" ml={8}/><Inp value={data.email} onChange={v=>set("email",v)} style={{ width:200 }}/></Row>
+          <Row><Lbl t="Lieferadresse"/></Row>
+          <Inp value={data.lieferadresse} onChange={v=>set("lieferadresse",v)} rows={2}/>
+          <div style={{ marginTop:4,display:"flex",gap:8,alignItems:"center" }}>
+            <label style={{ display:"flex",alignItems:"center",gap:4,fontSize:11,cursor:"pointer" }}>
+              <input type="checkbox" checked={!!data.neukunde} onChange={e=>set("neukunde",e.target.checked)} style={{ width:14,height:14 }}/>Neukunde
+            </label>
+            <Lbl t="Mail" ml={6}/><Inp value={data.mail} onChange={v=>set("mail",v)} style={{ width:80 }}/>
+          </div>
+        </div>
+        <div style={{ flex:2,padding:"5px 8px" }}>
+          <Row>
+            <Lbl t="ausgeliefert am"/>
+            <Inp value={data.ausgeliefert_am} onChange={v=>set("ausgeliefert_am",v)} type="date" style={{ width:120 }}/>
+            <Lbl t="Ersatz" ml={6}/>
+            <Inp value={data.ersatzpflanzen} onChange={v=>set("ersatzpflanzen",v)} style={{ ...S.pink,width:80 }}/>
+          </Row>
+          <Row><Lbl t="Kdr"/><Inp value={data.kdr} onChange={v=>set("kdr",v)} style={{ ...S.yellow,width:55 }}/></Row>
+          <Row>
+            <button style={{ ...S.green,border:"none",borderRadius:3,padding:"3px 10px",cursor:"pointer",fontSize:12,fontWeight:700 }}>S</button>
+            <button style={{ background:"#ff8800",color:"#fff",border:"none",borderRadius:3,padding:"3px 10px",cursor:"pointer",fontSize:12,marginLeft:4 }}>N</button>
+            <Lbl t="TOTAL 2025" ml={10}/><Inp value={data.total_vorjahr} onChange={v=>set("total_vorjahr",v)} style={{ ...S.yellow,width:55,textAlign:"center" }}/>
+            <Lbl t="ALTE CM" ml={6}/><Inp value={data.alte_cm} onChange={v=>set("alte_cm",v)} style={{ width:55 }}/>
+          </Row>
+        </div>
+      </div>
+
+      {/* Bemerkungen aktuell */}
+      <div style={{ marginBottom:6 }}>
+        <div style={{ fontSize:10,fontWeight:700,color:"#555",marginBottom:2 }}>Bemerkungen {YEAR}</div>
+        <Inp value={data.bemerkungen_aktuell} onChange={v=>set("bemerkungen_aktuell",v)} rows={3} style={{ background:"#e8ffe8",border:"1px solid #99cc99" }}/>
+      </div>
+
+      {/* Positionen */}
+      <div style={{ marginBottom:6 }}>
+        <PositionenEditor positionen={pos} onChange={setPos} />
+      </div>
+
+      {/* Custom Fields (aus Builder) */}
+      {schema.length>0 && (
+        <div style={{ marginBottom:8,background:"#f0f0ff",border:"1px solid #ccccff",padding:"6px 8px",borderRadius:4 }}>
+          <div style={{ fontSize:10,fontWeight:700,color:"#4444aa",marginBottom:6 }}>Benutzerdefinierte Felder</div>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8 }}>
+            {[...schema].sort((a,b)=>a.y-b.y||a.x-b.x).map(f=>(
+              <div key={f.field_id||f.id}>
+                {f.type!=="check"&&<div style={{ ...S.label,marginBottom:2 }}>{f.label}</div>}
+                {renderCustomField(f)}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rabatt */}
+      <Row>
+        <Lbl t="Rabatt TXT"/><Inp value={data.rabatt_txt} onChange={v=>set("rabatt_txt",v)} style={{ flex:1,minWidth:140 }}/>
+        <Lbl t="Rabatt xf" ml={8}/><Inp value={data.rabatt_xf} onChange={v=>set("rabatt_xf",v)} type="number" style={{ ...S.pink,width:65 }}/>
+        <span style={{ fontSize:12,fontWeight:700,marginLeft:4,paddingTop:3 }}>{fmt2(sumPreis*(1-1/rabattFak))} €</span>
+      </Row>
+      <Row><Lbl t="Gutschein"/><Inp value={data.gutschein} onChange={v=>set("gutschein",v)} style={{ flex:1 }}/></Row>
+
+      {/* Transport */}
+      <div style={{ display:"flex",gap:6,marginBottom:3,alignItems:"center",background:"#fff3e0",padding:"4px 6px",border:"1px solid #f0c060" }}>
+        <Lbl t="Transport"/><Inp value={data.trans_txt} onChange={v=>set("trans_txt",v)} style={{ flex:1 }}/>
+        <Inp value={data.trans_preis} onChange={v=>set("trans_preis",v)} type="number" style={{ width:80,textAlign:"right" }}/>
+        <span style={{ fontSize:12,fontWeight:700 }}>€</span>
+      </div>
+
+      {/* Dünger */}
+      <div style={{ display:"flex",gap:6,marginBottom:3,alignItems:"center",background:"#f0fff0",padding:"4px 6px",border:"1px solid #99cc99" }}>
+        <Inp value={data.duenger_txt} onChange={v=>set("duenger_txt",v)} style={{ flex:1 }}/>
+        <Inp value={data.duenger_preis} onChange={v=>set("duenger_preis",v)} type="number" style={{ width:80,textAlign:"right" }}/>
+        <span style={{ fontSize:12,fontWeight:700 }}>€</span>
+      </div>
+
+      <Row><Lbl t="Zeit Abholung"/><Inp value={data.zeit_abholung} onChange={v=>set("zeit_abholung",v)} style={{ ...S.yellow,width:130 }}/></Row>
+
+      {/* Summen */}
+      <div style={{ display:"flex",gap:10,marginBottom:8,marginTop:6 }}>
+        <div style={{ flex:1,border:"1px solid #ccc",background:"#fff",padding:"7px 10px" }}>
+          {[["Drittelsumme",fmt2(endsumme/3)],["Zweidrittel",fmt2(endsumme*2/3)]].map(([l,v])=>(
+            <div key={l} style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+              <span style={{ fontSize:12,fontWeight:600 }}>{l}</span>
+              <span style={{ fontSize:13,fontWeight:800,color:"#cc0000",background:"#ffe0e0",padding:"1px 8px",border:"1px solid #ffaaaa" }}>{v} €</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ flex:2,border:"1px solid #ccc",background:"#fff",padding:"7px 10px" }}>
+          {[["Endsumme o. MwSt",fmt2(endsummeO),"#e8ffe8","#99cc99"],["Gesamtendsumme (inkl. 19%)",fmt2(endsumme),"#fff3e0","#f0c060"]].map(([l,v,bg,bc])=>(
+            <div key={l} style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+              <span style={{ fontSize:12,fontWeight:600 }}>{l}</span>
+              <span style={{ fontSize:13,fontWeight:800,color:"#006600",background:bg,padding:"1px 10px",border:`1px solid ${bc}` }}>{v} €</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ flex:1,border:"1px solid #ccc",background:"#fff",padding:"7px 10px" }}>
+          <div style={{ fontSize:10,fontWeight:700,color:"#555",marginBottom:3 }}>Transportdauer</div>
+          <Inp value={data.transportdauer} onChange={v=>set("transportdauer",v)} rows={2}/>
+        </div>
+      </div>
+
+      {/* Restpflanzen + Bemerkungen */}
+      <div style={{ display:"flex",gap:10,marginBottom:6 }}>
+        <div style={{ flex:2,border:"1px solid #ccc",padding:"6px 8px",background:"#fffef0" }}>
+          <div style={{ fontSize:10,fontWeight:700,color:"#666",marginBottom:3 }}>Restpflanzen</div>
+          <Inp value={data.restpflanzen} onChange={v=>set("restpflanzen",v)} rows={2} style={{ background:"#fffff0" }}/>
+          <Row><Lbl t="Info"/><Inp value={data.restpflanzen_info} onChange={v=>set("restpflanzen_info",v)}/></Row>
+        </div>
+        <div style={{ flex:3 }}>
+          {[["Bemerkungen 2022","bemerkungen_2022","#e0f7ff"],["Bemerkungen 2023","bemerkungen_2023","#ccffff"],["Bemerkungen 2024","bemerkungen_2024","#ffccff"],["Bemerkungen 2025","bemerkungen_2025","#ccffff"]].map(([l,k,bg])=>(
+            <div key={k} style={{ marginBottom:4 }}>
+              <div style={{ fontSize:10,fontWeight:700,color:"#555",marginBottom:1 }}>{l}</div>
+              <Inp value={data[k]} onChange={v=>set(k,v)} rows={2} style={{ background:bg,border:"1px solid #ccc" }}/>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Row>
+        <Lbl t="Camelia"/>
+        <Inp value={data.camelia} onChange={v=>set("camelia",v)} style={{ width:130 }}/>
+        <Lbl t="Vapiano Pflanzen" ml={10}/>
+        <Inp value={data.vapiano_pflanzen} onChange={v=>set("vapiano_pflanzen",v)} style={{ ...S.green,flex:1 }}/>
+      </Row>
+    </div>
+  );
+}
+
+// ─── FORMULAR BUILDER ─────────────────────────────────────────
+
+const FIELD_TYPES = [
+  { type:"text","icon":"T","label":"Textfeld" },
+  { type:"number","icon":"#","label":"Zahlenfeld" },
+  { type:"formula","icon":"ƒ","label":"Formelfeld" },
+  { type:"select","icon":"▾","label":"Auswahl" },
+  { type:"date","icon":"📅","label":"Datum" },
+  { type:"check","icon":"☑","label":"Checkbox" },
+];
+
+function FormularBuilder({ schema, setSchema, onClose, onSave }) {
+  const [dragging, setDragging] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+  const [editF, setEditF] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const COLS=3, ROWS=6;
+  const cells = [];
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++) cells.push({x:c,y:r});
+  const fieldAt = (x,y) => schema.find(f=>f.x===x&&f.y===y);
+
+  const handleDrop = (e,x,y) => {
+    e.preventDefault();
+    if(!dragging) return;
+    if(dragging.startsWith("new:")) {
+      const type=dragging.replace("new:","");
+      if(fieldAt(x,y)) return;
+      const fid = uid();
+      setSchema(prev=>[...prev,{ id:fid, field_id:fid, type, label:FIELD_TYPES.find(t=>t.type===type)?.label||"Feld", x, y, formula:"", options:"", prefix:"", suffix:"" }]);
+    } else {
+      const ex=fieldAt(x,y), drag=schema.find(f=>f.field_id===dragging||f.id===dragging);
+      if(!drag) return;
+      setSchema(prev=>prev.map(f=>{
+        if((f.field_id||f.id)===dragging) return {...f,x,y};
+        if(ex&&(f.field_id||f.id)===(ex.field_id||ex.id)) return {...f,x:drag.x,y:drag.y};
+        return f;
+      }));
+    }
+    setDragging(null); setDragOver(null);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try { await onSave(schema); onClose(); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ display:"flex",gap:16 }}>
+      <div style={{ width:145,flexShrink:0 }}>
+        <div style={{ fontSize:11,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:".05em",marginBottom:8 }}>Feldtypen</div>
+        <div style={{ display:"flex",flexDirection:"column",gap:5 }}>
+          {FIELD_TYPES.map(ft=>(
+            <div key={ft.type} draggable onDragStart={e=>{setDragging(`new:${ft.type}`);e.dataTransfer.effectAllowed="copy";}}
+              style={{ display:"flex",alignItems:"center",gap:7,padding:"6px 10px",background:"#f8fafc",border:"1px dashed #cbd5e1",borderRadius:7,cursor:"grab",fontSize:12,color:"#374151" }}>
+              <span style={{ fontSize:14,color:"#6366f1",fontWeight:700,width:18,textAlign:"center" }}>{ft.icon}</span>{ft.label}
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop:14,fontSize:10,color:"#666",lineHeight:1.6 }}>
+          <strong>Variablen für Formeln:</strong><br/>
+          {["ANZAHL_GESAMT","PREIS_GESAMT","ARTEN_ANZAHL"].map(v=>(
+            <code key={v} style={{ display:"block",background:"#ede9fe",borderRadius:3,padding:"1px 4px",marginTop:2,fontSize:10 }}>{v}</code>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ flex:1 }}>
+        <div style={{ fontSize:11,fontWeight:700,color:"#555",textTransform:"uppercase",letterSpacing:".05em",marginBottom:8 }}>Layout (Doppelklick = bearbeiten)</div>
+        <div style={{ display:"grid",gridTemplateColumns:`repeat(${COLS},1fr)`,gap:7,background:"#f8fafc",borderRadius:10,padding:9,border:"1px solid #e2e8f0" }}>
+          {cells.map(({x,y})=>{
+            const f=fieldAt(x,y), isOver=dragOver===`${x},${y}`;
+            return (
+              <div key={`${x},${y}`}
+                style={{ minHeight:54,border:`2px dashed ${isOver?"#6366f1":"#e2e8f0"}`,borderRadius:8,background:isOver?"#ede9fe":"#fff",position:"relative",transition:"all .1s" }}
+                onDragOver={e=>{e.preventDefault();setDragOver(`${x},${y}`);}}
+                onDrop={e=>handleDrop(e,x,y)} onDragLeave={()=>setDragOver(null)}>
+                {f ? (
+                  <div draggable onDragStart={e=>{setDragging(f.field_id||f.id);e.dataTransfer.effectAllowed="move";}}
+                    onDoubleClick={()=>setEditF({...f})}
+                    style={{ padding:"7px 9px",cursor:"grab",opacity:dragging===(f.field_id||f.id)?.35:1 }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start" }}>
+                      <span style={{ fontSize:9,fontWeight:700,color:"#6366f1",textTransform:"uppercase",letterSpacing:".05em" }}>{f.label}</span>
+                      <div style={{ display:"flex",gap:2 }}>
+                        <button onClick={e=>{e.stopPropagation();setEditF({...f});}} style={{ background:"#ede9fe",border:"none",borderRadius:3,padding:"1px 5px",fontSize:10,cursor:"pointer",color:"#6366f1" }}>✎</button>
+                        <button onClick={()=>setSchema(prev=>prev.filter(ff=>(ff.field_id||ff.id)!==(f.field_id||f.id)))} style={{ background:"#fee2e2",border:"none",borderRadius:3,padding:"1px 5px",fontSize:10,cursor:"pointer",color:"#b91c1c" }}>×</button>
+                      </div>
+                    </div>
+                    <div style={{ fontSize:10,color:"#94a3b8",fontFamily:f.type==="formula"?"monospace":"inherit" }}>
+                      {f.type==="formula"?`=${f.formula||"?"}`:f.type==="select"?f.options||"…":f.type==="check"?"☐":f.type==="number"?`${f.prefix||""}0${f.suffix||""}`:f.type}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:54,color:"#d1d5db",fontSize:10 }}>Leer</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display:"flex",justifyContent:"flex-end",gap:8,marginTop:12 }}>
+          <button onClick={onClose} style={{ background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 16px",fontSize:13,cursor:"pointer" }}>Abbrechen</button>
+          <button onClick={save} disabled={saving} style={{ background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,cursor:"pointer",fontWeight:700 }}>
+            {saving?"Speichern…":"💾 In Supabase speichern"}
+          </button>
+        </div>
+      </div>
+
+      {editF && (
+        <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1100 }}>
+          <div style={{ background:"#fff",borderRadius:13,padding:24,width:360,boxShadow:"0 16px 48px rgba(0,0,0,.25)" }}>
+            <div style={{ fontWeight:700,fontSize:14,marginBottom:14 }}>Feld bearbeiten</div>
+            {[["label","Bezeichnung"],["prefix","Präfix"],["suffix","Suffix"]].map(([k,l])=>(
+              <div key={k} style={{ marginBottom:10 }}>
+                <label style={{ fontSize:11,fontWeight:700,color:"#555",display:"block",marginBottom:3 }}>{l}</label>
+                <input value={editF[k]||""} onChange={e=>setEditF({...editF,[k]:e.target.value})} style={{ ...S.cell }} />
+              </div>
+            ))}
+            {editF.type==="formula"&&(
+              <div style={{ marginBottom:10 }}>
+                <label style={{ fontSize:11,fontWeight:700,color:"#555",display:"block",marginBottom:3 }}>Formel</label>
+                <input value={editF.formula||""} onChange={e=>setEditF({...editF,formula:e.target.value})}
+                  placeholder="ANZAHL_GESAMT * 12.5" style={{ ...S.cell,fontFamily:"monospace" }} />
+                <div style={{ fontSize:10,color:"#888",marginTop:3 }}>+−×÷, SUM(a,b), AVG(a,b), Feld-IDs</div>
+              </div>
+            )}
+            {editF.type==="select"&&(
+              <div style={{ marginBottom:10 }}>
+                <label style={{ fontSize:11,fontWeight:700,color:"#555",display:"block",marginBottom:3 }}>Optionen (Komma)</label>
+                <input value={editF.options||""} onChange={e=>setEditF({...editF,options:e.target.value})} placeholder="Klein, Mittel, Groß" style={{ ...S.cell }} />
+              </div>
+            )}
+            <div style={{ fontSize:10,color:"#94a3b8",marginBottom:12 }}>Feld-ID: <code style={{ background:"#f1f5f9",padding:"1px 5px",borderRadius:3" }}>{editF.field_id||editF.id}</code></div>
+            <div style={{ display:"flex",gap:8 }}>
+              <button onClick={()=>{ setSchema(prev=>prev.map(f=>(f.field_id||f.id)===(editF.field_id||editF.id)?editF:f)); setEditF(null); }}
+                style={{ background:"#6366f1",color:"#fff",border:"none",borderRadius:7,padding:"7px 16px",fontSize:13,cursor:"pointer",fontWeight:700 }}>OK</button>
+              <button onClick={()=>setEditF(null)} style={{ background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:7,padding:"7px 12px",fontSize:13,cursor:"pointer" }}>Abbrechen</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MODAL ─────────────────────────────────────────────────────
+
+function Modal({ title, onClose, wide, children }) {
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
+      <div style={{ background:"#fff",borderRadius:14,width:wide?"min(980px,97vw)":"min(600px,95vw)",maxHeight:"93vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)" }}>
+        <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2 }}>
+          <span style={{ fontWeight:700,fontSize:15,color:"#0f172a" }}>{title}</span>
+          <button onClick={onClose} style={{ background:"#f1f5f9",border:"none",borderRadius:7,width:28,height:28,cursor:"pointer",fontSize:16,color:"#555" }}>×</button>
+        </div>
+        <div style={{ padding:20 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TOURENPLANUNG ─────────────────────────────────────────────
+
+function Tourenplanung({ kunden, touren, setTouren, onSaveTour }) {
+  const [drag, setDrag] = useState(null);
+  const unassigned = kunden.filter(k=>!touren.some(t=>t.kundenIds?.includes(k.id)));
+
+  const assign = (kid,tid) => {
+    setTouren(prev=>prev.map(t=>{
+      const without={...t,kundenIds:(t.kundenIds||[]).filter(id=>id!==kid)};
+      if(t.id===tid) return {...without,kundenIds:[...(without.kundenIds||[]),kid]};
+      return without;
+    }));
+  };
+  const remove = (kid,tid) => setTouren(prev=>prev.map(t=>t.id===tid?{...t,kundenIds:(t.kundenIds||[]).filter(id=>id!==kid)}:t));
+  const addTour = async () => {
+    const cols=["#10b981","#6366f1","#f59e0b","#ec4899","#0891b2"];
+    const neu={name:`Tour ${String.fromCharCode(65+touren.length)}`,fahrer:"",datum:TODAY,farbe:cols[touren.length%cols.length],kundenIds:[]};
+    try {
+      const saved=await onSaveTour(neu);
+      setTouren(prev=>[...prev,{...neu,...saved}]);
+    } catch(e){ console.error(e); }
+  };
+  const upd=(id,k,v)=>setTouren(prev=>prev.map(t=>t.id===id?{...t,[k]:v}:t));
+
+  return (
+    <div>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
+        <div>
+          <div style={{ fontWeight:800,fontSize:18,color:"#0f172a" }}>Tourenplanung</div>
+          <div style={{ fontSize:12,color:"#64748b" }}>{kunden.length} Kunden · {touren.length} Touren</div>
+        </div>
+        <button onClick={addTour} style={{ background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,cursor:"pointer",fontWeight:700 }}>+ Tour</button>
+      </div>
+      <div style={{ display:"flex",gap:12,overflowX:"auto",paddingBottom:8 }}>
+        <div style={{ width:210,flexShrink:0 }}
+          onDragOver={e=>e.preventDefault()}
+          onDrop={()=>{ if(drag){touren.forEach(t=>{if((t.kundenIds||[]).includes(drag))remove(drag,t.id);}); setDrag(null); } }}>
+          <div style={{ fontWeight:700,fontSize:11,color:"#64748b",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 10px",marginBottom:6 }}>
+            Nicht zugewiesen ({unassigned.length})
+          </div>
+          {unassigned.map(k=>(
+            <div key={k.id} draggable onDragStart={()=>setDrag(k.id)}
+              style={{ background:"#fff",border:"1px solid #e2e8f0",borderRadius:7,padding:"6px 9px",marginBottom:4,cursor:"grab",fontSize:12 }}>
+              <div style={{ fontWeight:600,color:"#374151" }}>{k.firma||k.vorname||"?"}</div>
+              <div style={{ fontSize:10,color:"#94a3b8" }}>{k.strasse}, {k.plz} {k.ort}</div>
+            </div>
+          ))}
+          {unassigned.length===0&&<div style={{ textAlign:"center",fontSize:11,color:"#94a3b8",padding:"16px 0" }}>Alle zugewiesen ✓</div>}
+        </div>
+        {touren.map(t=>{
+          const tk=(t.kundenIds||[]).map(id=>kunden.find(k=>k.id===id)).filter(Boolean);
+          return (
+            <div key={t.id} style={{ width:230,flexShrink:0 }}>
+              <div style={{ background:t.farbe+"18",border:`1px solid ${t.farbe}55`,borderRadius:9,padding:"7px 9px",marginBottom:6 }}>
+                <div style={{ display:"flex",alignItems:"center",gap:5,marginBottom:5 }}>
+                  <div style={{ width:10,height:10,borderRadius:"50%",background:t.farbe,flexShrink:0 }} />
+                  <input value={t.name} onChange={e=>upd(t.id,"name",e.target.value)} style={{ flex:1,background:"transparent",border:"none",fontWeight:700,fontSize:13,color:"#0f172a",outline:"none" }} />
+                  <button onClick={()=>setTouren(prev=>prev.filter(tt=>tt.id!==t.id))} style={{ background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:13 }}>×</button>
+                </div>
+                <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:4 }}>
+                  <div><div style={{ fontSize:9,color:"#94a3b8",fontWeight:600 }}>FAHRER</div>
+                    <input value={t.fahrer||""} onChange={e=>upd(t.id,"fahrer",e.target.value)} style={{ ...S.cell,fontSize:11 }} /></div>
+                  <div><div style={{ fontSize:9,color:"#94a3b8",fontWeight:600 }}>DATUM</div>
+                    <input type="date" value={t.datum||""} onChange={e=>upd(t.id,"datum",e.target.value)} style={{ ...S.cell,fontSize:11 }} /></div>
+                </div>
+                <div style={{ fontSize:11,color:t.farbe,fontWeight:600,marginTop:4 }}>{tk.length} Kunden</div>
+              </div>
+              <div style={{ minHeight:50,border:`2px dashed ${t.farbe}66`,borderRadius:8,padding:5 }}
+                onDragOver={e=>e.preventDefault()}
+                onDrop={()=>{ if(drag){assign(drag,t.id);setDrag(null);} }}>
+                {tk.map((k,idx)=>(
+                  <div key={k.id} style={{ background:"#fff",border:`1px solid ${t.farbe}44`,borderRadius:6,padding:"4px 7px",marginBottom:3,fontSize:11,display:"flex",justifyContent:"space-between",alignItems:"flex-start" }}>
+                    <div>
+                      <span style={{ background:t.farbe+"22",color:t.farbe,borderRadius:3,padding:"0 4px",fontSize:9,fontWeight:700,marginRight:4 }}>{idx+1}</span>
+                      <span style={{ fontWeight:600 }}>{k.firma||k.vorname||"?"}</span>
+                      <div style={{ fontSize:10,color:"#94a3b8",paddingLeft:16 }}>{k.strasse}</div>
+                    </div>
+                    <button onClick={()=>remove(k.id,t.id)} style={{ background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:11 }}>×</button>
+                  </div>
+                ))}
+                {tk.length===0&&<div style={{ textAlign:"center",color:"#94a3b8",fontSize:10,padding:"12px 0" }}>Hier ablegen</div>}
+              </div>
+              <button onClick={()=>onSaveTour(t)} style={{ marginTop:5,width:"100%",background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px",fontSize:11,cursor:"pointer",color:"#374151" }}>💾 Tour speichern</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN APP ──────────────────────────────────────────────────
+
+export default function App() {
+  const [sbUrl,  setSbUrl]  = useState(SUPABASE_URL);
+  const [sbKey,  setSbKey]  = useState(SUPABASE_ANON);
+  const [client, setClient] = useState(null);
+  const [connected, setConnected] = useState(false);
+
+  const [kunden,  setKunden]  = useState([]);
+  const [touren,  setTouren]  = useState([]);
+  const [schema,  setSchema]  = useState([]);
+  const [activeId,setActiveId]=useState(null);
+  const [activeData,setActiveData]=useState(null);
+  const [loading, setLoading] = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const [modal,   setModal]   = useState(null);
+  const [page,    setPage]    = useState("stammblatt");
+  const [err,     setErr]     = useState(null);
+
+  // Override the module-level sb after connect
+  const sbRef = useRef(sb);
+
+  const onConnect = useCallback(async (url, key) => {
+    const c = createClient(url, key);
+    sbRef.current = c;
+    setConnected(true);
+    setLoading(true);
+    try {
+      const [k, s, t] = await Promise.all([
+        c.from("kunden").select("*").order("created_at"),
+        c.from("formular_felder").select("*").order("sort_order"),
+        c.from("touren").select("*, tour_kunden(kunde_id)").order("datum"),
+      ]);
+      if(k.error) throw k.error;
+      setKunden(k.data||[]);
+      setSchema(s.data||[]);
+      setTouren((t.data||[]).map(tt=>({...tt,kundenIds:(tt.tour_kunden||[]).map(r=>r.kunde_id)})));
+      if(k.data?.length) { setActiveId(k.data[0].id); loadKunde(k.data[0].id, c); }
+    } catch(e){ setErr(e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  // If URL/key already filled in source, auto-connect
+  useEffect(() => {
+    if(SUPABASE_URL !== "https://DEIN-PROJEKT.supabase.co" && SUPABASE_ANON !== "DEIN-ANON-KEY") {
+      onConnect(SUPABASE_URL, SUPABASE_ANON);
+    }
+  }, []);
+
+  const loadKunde = async (id, c = sbRef.current) => {
+    setLoading(true);
+    try {
+      const [p, f] = await Promise.all([
+        c.from("positionen").select("*").eq("kunde_id",id).order("sort_order"),
+        c.from("kunden_felder").select("*").eq("kunde_id",id),
+      ]);
+      const felder={};
+      (f.data||[]).forEach(r=>{felder[r.feld_id]=r.wert;});
+      const pos=(p.data||[]);
+      // Ensure P1–P12
+      const labels=["P1","P2","P3","P4","P5","P6","P7","P8","P9","P10","P11","P12"];
+      const filled=labels.map(l=>pos.find(pp=>pp.label===l)||{label:l,art:"",cm:"",preis:"",anzahl:""});
+      const base=kunden.find(k=>k.id===id)||{};
+      setActiveData({...base,positionen:filled,felder});
+      setActiveId(id);
+    } catch(e){ setErr(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const saveKunde = async () => {
+    if(!activeData) return;
+    setSaving(true); setErr(null);
+    try {
+      const c=sbRef.current;
+      const { positionen, felder, ...rest } = activeData;
+      const id = rest.id;
+      if(id) {
+        const {error}=await c.from("kunden").update(rest).eq("id",id);
+        if(error) throw error;
+      } else {
+        const {data,error}=await c.from("kunden").insert(rest).select().single();
+        if(error) throw error;
+        rest.id=data.id;
+        setKunden(prev=>[...prev,data]);
+        setActiveId(data.id);
+      }
+      await Promise.all([
+        (async()=>{
+          await c.from("positionen").delete().eq("kunde_id",rest.id);
+          const rows=positionen.filter(p=>p.art||p.cm||p.preis).map((p,i)=>({kunde_id:rest.id,label:p.label,sort_order:i,art:p.art||null,anzahl:p.anzahl||null,cm:p.cm?parseFloat(p.cm):null,preis:p.preis?parseFloat(p.preis):null}));
+          if(rows.length){ const{error}=await c.from("positionen").insert(rows); if(error)throw error; }
+        })(),
+        (async()=>{
+          const rows=Object.entries(felder||{}).filter(([,v])=>v!==undefined&&v!=="").map(([feld_id,wert])=>({kunde_id:rest.id,feld_id,wert:String(wert)}));
+          if(rows.length){ const{error}=await c.from("kunden_felder").upsert(rows,{onConflict:"kunde_id,feld_id"}); if(error)throw error; }
+        })(),
+      ]);
+      setKunden(prev=>prev.map(k=>k.id===rest.id?{...k,...rest}:k));
+    } catch(e){ setErr("Fehler beim Speichern: "+e.message); }
+    finally { setSaving(false); }
+  };
+
+  const newKunde = async () => {
+    const neu={ jahr:String(YEAR), firma:"", vorname:"Neuer Kunde", plz:"", ort:"", strasse:"", telefon:"", email:"", code:"", rabatt_xf:1 };
+    const c=sbRef.current;
+    const{data,error}=await c.from("kunden").insert(neu).select().single();
+    if(error){setErr(error.message);return;}
+    const labels=["P1","P2","P3","P4","P5","P6","P7","P8","P9","P10","P11","P12"];
+    const positionen=labels.map(l=>({label:l,art:"",cm:"",preis:"",anzahl:""}));
+    setKunden(prev=>[...prev,data]);
+    setActiveData({...data,positionen,felder:{}});
+    setActiveId(data.id);
+  };
+
+  const deleteKunde = async (id) => {
+    if(!confirm("Datensatz wirklich löschen?")) return;
+    const{error}=await sbRef.current.from("kunden").delete().eq("id",id);
+    if(error){setErr(error.message);return;}
+    setKunden(prev=>prev.filter(k=>k.id!==id));
+    if(activeId===id){setActiveData(null);setActiveId(null);}
+  };
+
+  const saveSchemaToDb = async (fields) => {
+    const c=sbRef.current;
+    await c.from("formular_felder").delete().neq("sort_order",-1);
+    if(fields.length){ const{error}=await c.from("formular_felder").insert(fields.map((f,i)=>({...f,sort_order:i}))); if(error)throw error; }
+    setSchema(fields);
+  };
+
+  const saveTour = async (tour) => {
+    const c=sbRef.current;
+    const{kundenIds,tour_kunden,...t}=tour;
+    const{data,error}=await c.from("touren").upsert(t,{onConflict:"id"}).select().single();
+    if(error)throw error;
+    await c.from("tour_kunden").delete().eq("tour_id",data.id);
+    if(kundenIds?.length){ const rows=kundenIds.map((kid,i)=>({tour_id:data.id,kunde_id:kid,sort_order:i})); await c.from("tour_kunden").insert(rows); }
+    return data;
+  };
+
+  if(!connected) return <SetupScreen onConnect={onConnect}/>;
+
+  return (
+    <div style={{ display:"flex",height:"100vh",fontFamily:"Arial,sans-serif",background:"#2a2a2a",overflow:"hidden" }}>
+      {/* Sidebar */}
+      <div style={{ width:200,background:"#1a1a2e",display:"flex",flexDirection:"column",flexShrink:0 }}>
+        <div style={{ padding:"12px 12px 8px",borderBottom:"1px solid #333" }}>
+          <div style={{ fontWeight:800,fontSize:14,color:"#00cc00",letterSpacing:"-.01em" }}>🌿 Botanikum</div>
+          <div style={{ fontSize:10,color:"#4ade80",marginTop:1 }}>● Supabase verbunden</div>
+        </div>
+        <div style={{ padding:"6px 8px",borderBottom:"1px solid #333",display:"flex",flexDirection:"column",gap:2 }}>
+          {[["stammblatt","📋","Stammblätter"],["touren","🚐","Touren"]].map(([id,ic,l])=>(
+            <button key={id} onClick={()=>setPage(id)} style={{ background:page===id?"rgba(0,204,0,.2)":"transparent",color:page===id?"#4ade80":"#888",border:"none",borderRadius:6,padding:"7px 10px",fontSize:12,cursor:"pointer",textAlign:"left",display:"flex",alignItems:"center",gap:7,fontWeight:page===id?700:400 }}>
+              <span>{ic}</span>{l}
+            </button>
+          ))}
+        </div>
+        <div style={{ padding:"6px 6px",flex:1,overflowY:"auto" }}>
+          <div style={{ fontSize:9,fontWeight:700,color:"#4ade80",textTransform:"uppercase",letterSpacing:".08em",padding:"4px 6px" }}>Datensätze ({kunden.length})</div>
+          {kunden.map(k=>(
+            <div key={k.id} onClick={()=>loadKunde(k.id)}
+              style={{ padding:"6px 8px",cursor:"pointer",borderRadius:6,background:activeId===k.id?"rgba(0,204,0,.2)":"transparent",borderLeft:activeId===k.id?"3px solid #00cc00":"3px solid transparent",marginBottom:1 }}>
+              <div style={{ fontSize:11,fontWeight:600,color:activeId===k.id?"#4ade80":"#bbb",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{k.firma||k.vorname||"–"}</div>
+              <div style={{ fontSize:9,color:"#555" }}>{k.plz} {k.ort}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding:"8px",borderTop:"1px solid #333",display:"flex",flexDirection:"column",gap:5 }}>
+          <button onClick={newKunde} style={{ background:"#00cc00",color:"#fff",border:"none",borderRadius:6,padding:"7px",fontSize:12,cursor:"pointer",fontWeight:700 }}>+ Neu</button>
+          <button onClick={()=>setModal("builder")} style={{ background:"rgba(99,102,241,.25)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,.3)",borderRadius:6,padding:"5px",fontSize:11,cursor:"pointer" }}>⚙ Felder-Builder</button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ flex:1,display:"flex",flexDirection:"column",overflow:"hidden" }}>
+        {/* Toolbar */}
+        <div style={{ background:"#c0c0b8",borderBottom:"2px solid #888",padding:"3px 10px",display:"flex",alignItems:"center",gap:8,flexShrink:0 }}>
+          {["Datei","Bearbeiten","Modus","Format","Script"].map(m=>(
+            <button key={m} style={{ background:"transparent",border:"none",cursor:"pointer",fontSize:12,padding:"2px 6px" }}>{m}</button>
+          ))}
+          <div style={{ flex:1 }}/>
+          {err&&<span style={{ fontSize:11,color:"#cc0000",background:"#ffe0e0",padding:"2px 8px",borderRadius:4 }}>⚠ {err}</span>}
+          <span style={{ fontSize:11,background:"#fff",border:"1px solid #888",padding:"2px 8px" }}>Datensätze: {kunden.length}</span>
+        </div>
+
+        {/* Tab */}
+        <div style={{ background:"#d4d0c8",borderBottom:"1px solid #888",padding:"0 10px",display:"flex",alignItems:"flex-end",flexShrink:0 }}>
+          <div style={{ background:"#f0ede8",border:"1px solid #888",borderBottom:"none",padding:"4px 16px",fontSize:12,fontWeight:700 }}>STAM</div>
+        </div>
+
+        {/* Content */}
+        <div style={{ flex:1,overflow:"auto",background:"#e0ddd8",padding:"8px 10px" }}>
+          {loading ? (
+            <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#555",fontSize:14 }}>Lade…</div>
+          ) : page==="stammblatt" ? (
+            activeData ? (
+              <Stammblatt data={activeData} schema={schema} onChange={setActiveData} onSave={saveKunde} saving={saving} />
+            ) : (
+              <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888" }}>Datensatz auswählen oder + Neu</div>
+            )
+          ) : (
+            <Tourenplanung kunden={kunden} touren={touren} setTouren={setTouren} onSaveTour={saveTour} />
+          )}
+        </div>
+
+        {/* Bottom */}
+        <div style={{ background:"#c0c0b8",borderTop:"1px solid #888",padding:"2px 10px",display:"flex",alignItems:"center",gap:10,fontSize:11,flexShrink:0 }}>
+          <div style={{ display:"flex",gap:2 }}>
+            {["◀◀","◀","▶","▶▶"].map((b,i)=>(
+              <button key={i} onClick={()=>{
+                const idx=kunden.findIndex(k=>k.id===activeId);
+                const next=i<2?Math.max(0,idx+(i===0?-kunden.length:-1)):Math.min(kunden.length-1,idx+(i===3?kunden.length:1));
+                if(kunden[next]) loadKunde(kunden[next].id);
+              }} style={{ background:"#ddd",border:"1px solid #888",padding:"1px 7px",cursor:"pointer",fontSize:11 }}>{b}</button>
+            ))}
+          </div>
+          <span>Datensatz {kunden.findIndex(k=>k.id===activeId)+1} von {kunden.length}</span>
+          {activeData&&<button onClick={()=>deleteKunde(activeId)} style={{ marginLeft:"auto",background:"#cc0000",color:"#fff",border:"none",borderRadius:4,padding:"2px 10px",fontSize:10,cursor:"pointer" }}>Löschen</button>}
+        </div>
+      </div>
+
+      {modal==="builder"&&(
+        <Modal title="⚙ Formular-Builder" onClose={()=>setModal(null)} wide>
+          <FormularBuilder schema={schema} setSchema={setSchema} onClose={()=>setModal(null)} onSave={saveSchemaToDb} />
+        </Modal>
+      )}
+    </div>
+  );
+}
