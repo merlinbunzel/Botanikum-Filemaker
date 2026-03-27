@@ -1,4 +1,4 @@
-import{useState,useEffect,useRef,useCallback}from"react";
+import React,{useState,useEffect,useRef,useCallback,createContext,useContext}from"react";
 
 const DEMO_MODE=true;
 
@@ -19,26 +19,50 @@ let _touren=[
 ];
 let _schema=[];
 let _posFormulaMap={};
+let _valueLists=[{id:"vl1",name:"Ja / Nein",items:["Ja","Nein"]},{id:"vl2",name:"Zahlungsart",items:["Bar","Überweisung","EC-Karte","Rechnung"]},{id:"vl3",name:"Status",items:["Offen","In Bearbeitung","Erledigt","Storniert"]}];
+let _relations=[
+  {id:"rel1",name:"Positionen",sourceField:"id",targetField:"kunde_id",targetTable:"positionen"},
+  {id:"rel2",name:"Notizen",sourceField:"id",targetField:"kunde_id",targetTable:"notizen"}
+];
+let _notizen={
+  k1:[{id:"n1",kunde_id:"k1",text:"Stammkunde seit 2020",datum:"2024-01-15"},{id:"n2",kunde_id:"k1",text:"Bevorzugt morgens",datum:"2024-03-10"}],
+  k2:[{id:"n2",kunde_id:"k2",text:"Nur Lieferung",datum:"2024-02-20"}],
+  k3:[]
+};
 
 const LABELS=["P1","P2","P3","P4","P5","P6","P7","P8","P9","P10","P11","P12"];
 
+const PART_TYPES=[
+  {type:"title_header",label:"Titelkopf",color:"#c8b99a"},
+  {type:"header",label:"Kopfzeile",color:"#b0a898"},
+  {type:"subsummary_above",label:"Vorkopf",color:"#9ab0c8"},
+  {type:"body",label:"Body",color:"#e8e4de"},
+  {type:"subsummary_below",label:"Nachfuß",color:"#9ab0c8"},
+  {type:"summary",label:"Gesamtergebnis",color:"#9ac8a0"},
+  {type:"footer",label:"Fußzeile",color:"#b0a898"},
+  {type:"title_footer",label:"Titelfuß",color:"#c8b99a"},
+];
+
 const DEFAULT_LAYOUT=[
-  {id:"kopf",label:"Kopfbereich",visible:true},
-  {id:"adresse",label:"Adresse & Kontakt",visible:true},
-  {id:"bemerkungen_aktuell",label:"Bemerkungen aktuell",visible:true},
-  {id:"positionen",label:"Positionen",visible:true},
-  {id:"custom_felder",label:"Benutzerdefinierte Felder (Builder)",visible:true},
-  {id:"rabatt",label:"Rabatt & Gutschein",visible:true},
-  {id:"transport",label:"Transport",visible:true},
-  {id:"duenger",label:"Dünger",visible:true},
-  {id:"zusatzposten",label:"Zusätzliche Posten",visible:true},
-  {id:"zeit",label:"Zeit Abholung",visible:true},
-  {id:"summen",label:"Summen",visible:true},
-  {id:"restpflanzen",label:"Restpflanzen & Historisch",visible:true},
-  {id:"sonstiges",label:"Sonstiges",visible:true},
+  {id:"kopf",label:"Kopfbereich",visible:true,partType:"header"},
+  {id:"adresse",label:"Adresse & Kontakt",visible:true,partType:"body"},
+  {id:"bemerkungen_aktuell",label:"Bemerkungen aktuell",visible:true,partType:"body"},
+  {id:"positionen",label:"Positionen",visible:true,partType:"body"},
+  {id:"portal_positionen",label:"Portal: Positionen",visible:true,partType:"body",isPortal:true,portalConfig:{relationId:"rel1",rows:5,showScrollbar:true,allowNew:true,allowDelete:true,alternateRows:true,fields:[{key:"label",label:"Pos",width:50},{key:"art",label:"Bezeichnung",width:200},{key:"cm",label:"cm",width:60},{key:"anzahl",label:"Anz",width:60},{key:"preis",label:"Preis €",width:80}]}},
+  {id:"custom_felder",label:"Benutzerdefinierte Felder (Builder)",visible:true,partType:"body"},
+  {id:"rabatt",label:"Rabatt & Gutschein",visible:true,partType:"body"},
+  {id:"transport",label:"Transport",visible:true,partType:"body"},
+  {id:"duenger",label:"Dünger",visible:true,partType:"body"},
+  {id:"zusatzposten",label:"Zusätzliche Posten",visible:true,partType:"body"},
+  {id:"zeit",label:"Zeit Abholung",visible:true,partType:"body"},
+  {id:"summen",label:"Summen",visible:true,partType:"summary"},
+  {id:"restpflanzen",label:"Restpflanzen & Historisch",visible:true,partType:"body"},
+  {id:"sonstiges",label:"Sonstiges",visible:true,partType:"footer"},
 ];
 let _layoutConfig=[...DEFAULT_LAYOUT];
 let _customPages=[];
+let _labelConfig={};
+let _layouts=[{id:"layout_main",name:"Stammblatt Standard",config:[...DEFAULT_LAYOUT],labelOverrides:{}}];
 
 const KNOWN_FIELDS=[
   {key:"firma",label:"Firma"},{key:"vorname",label:"Vorname"},
@@ -145,13 +169,24 @@ function evalFormula(formula,positionen,felder){
   }catch{return"Fehler"}
 }
 
+const LabelCtx=React.createContext({editMode:false,overrides:{},onChange:()=>{}});
+
 function Inp({value,onChange,style={},type="text",rows,readOnly}){
   const base={...S.cell,...style};
   if(rows)return<textarea value={value||""}onChange={e=>onChange&&onChange(e.target.value)}rows={rows}style={{...base,resize:"vertical"}}readOnly={readOnly}/>;
   return<input type={type}value={value||""}onChange={e=>onChange&&onChange(e.target.value)}style={base}readOnly={readOnly}/>;
 }
 function Row({children}){return<div style={{display:"flex",alignItems:"flex-start",gap:4,marginBottom:3}}>{children}</div>}
-function Lbl({t,ml}){return<span style={{...S.label,marginLeft:ml,minWidth:"max-content",paddingTop:3}}>{t}</span>}
+function Lbl({t,ml}){
+  const{editMode,overrides,onChange}=React.useContext(LabelCtx);
+  const display=overrides[t]!==undefined?overrides[t]:t;
+  if(editMode){
+    return<input value={display}onChange={e=>onChange({...overrides,[t]:e.target.value})}
+      title="Feldbezeichnung bearbeiten"
+      style={{...S.label,marginLeft:ml,minWidth:30,paddingTop:1,paddingBottom:1,background:"#fef9c3",border:"1px solid #fbbf24",borderRadius:3,cursor:"text",width:Math.max(40,display.length*7+10)}}/>;
+  }
+  return<span style={{...S.label,marginLeft:ml,minWidth:"max-content",paddingTop:3}}>{display}</span>;
+}
 
 function SetupScreen({onConnect}){
   const[url,setUrl]=useState("");
@@ -348,15 +383,31 @@ const FIELD_TYPES=[
   {type:"select",icon:"▾",label:"Auswahl"},
   {type:"date",icon:"📅",label:"Datum"},
   {type:"check",icon:"☑",label:"Checkbox"},
+  {type:"radio",icon:"◉",label:"Radiobuttons"},
+  {type:"checkbox_list",icon:"☑",label:"Checkboxliste"},
+  {type:"dropdown_vl",icon:"▾",label:"Dropdown (Liste)"},
+  {type:"listbox",icon:"≡",label:"Listenfeld"},
 ];
 
-function CustomSectionEditor({section,onSave,onClose}){
+const DEFAULT_FMT={borderTop:true,borderBottom:true,borderLeft:true,borderRight:true,borderColor:"#bbbbbb",fillColor:"#ffffff",fontSize:12,fontBold:false,fontItalic:false,textAlign:"left",fontColor:"#111111"};
+const VL_TYPES=["radio","checkbox_list","dropdown_vl","listbox"];
+
+function CustomSectionEditor({section,onSave,onClose,valueLists}){
   const[fields,setFields]=useState(section.fields||[]);
   const[label,setLabel]=useState(section.label||"");
+  const[openFmt,setOpenFmt]=useState({});
+  const[openCond,setOpenCond]=useState({});
   const updF=(i,k,v)=>{const fs=[...fields];fs[i]={...fs[i],[k]:v};setFields(fs);};
+  const updFmt=(i,k,v)=>{const fs=[...fields];fs[i]={...fs[i],fmt:{...DEFAULT_FMT,...(fs[i].fmt||{}),[k]:v}};setFields(fs);};
+  const toggleFmt=(i)=>setOpenFmt(prev=>({...prev,[i]:!prev[i]}));
+  const toggleCond=(i)=>setOpenCond(prev=>({...prev,[i]:!prev[i]}));
+  const updCond=(i,k,v)=>{const fs=[...fields];fs[i]={...fs[i],condition:{...(fs[i].condition||{}),[k]:v}};setFields(fs);};
+  const clearCond=(i)=>{const fs=[...fields];const{condition,...rest}=fs[i];fs[i]=rest;setFields(fs);};
+  const vls=valueLists||[];
+  const allFieldKeys=[...KNOWN_FIELDS.map(f=>({key:f.key,label:f.label})),...fields.map(f=>({key:f.field_id||f.id,label:f.label}))];
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1300}}>
-      <div style={{background:"#fff",borderRadius:14,width:600,maxHeight:"85vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
+      <div style={{background:"#fff",borderRadius:14,width:660,maxHeight:"88vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
         <div style={{display:"flex",alignItems:"center",padding:"14px 20px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2,gap:8}}>
           <input value={label}onChange={e=>setLabel(e.target.value)}style={{fontWeight:700,fontSize:15,color:"#0f172a",border:"none",outline:"none",flex:1,background:"transparent"}}placeholder="Abschnitt-Bezeichnung"/>
           <button onClick={onClose}style={{background:"#f1f5f9",border:"none",borderRadius:7,width:28,height:28,cursor:"pointer",fontSize:16,color:"#555"}}>×</button>
@@ -365,7 +416,7 @@ function CustomSectionEditor({section,onSave,onClose}){
           <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,paddingBottom:12,borderBottom:"1px solid #f1f5f9"}}>
             <span style={{fontSize:11,color:"#64748b",alignSelf:"center",marginRight:4}}>Feld hinzufügen:</span>
             {FIELD_TYPES.map(ft=>(
-              <button key={ft.type}onClick={()=>{const fid=uid();setFields(prev=>[...prev,{id:fid,field_id:fid,type:ft.type,label:ft.label,formula:"",options:"",prefix:"",suffix:""}]);}}
+              <button key={ft.type}onClick={()=>{const fid=uid();setFields(prev=>[...prev,{id:fid,field_id:fid,type:ft.type,label:ft.label,formula:"",options:"",prefix:"",suffix:"",valueListId:"",fmt:{...DEFAULT_FMT}}]);}}
                 style={{background:"#f8fafc",border:"1px dashed #cbd5e1",borderRadius:7,padding:"4px 10px",fontSize:12,cursor:"pointer",color:"#374151",display:"flex",alignItems:"center",gap:4}}>
                 <span style={{color:"#6366f1",fontWeight:700}}>{ft.icon}</span>{ft.label}
               </button>
@@ -373,19 +424,102 @@ function CustomSectionEditor({section,onSave,onClose}){
           </div>
           {fields.length===0&&<div style={{textAlign:"center",color:"#94a3b8",fontSize:12,padding:"24px 0"}}>Noch keine Felder. Klicke oben auf einen Feldtyp.</div>}
           <div style={{display:"flex",flexDirection:"column",gap:6}}>
-            {fields.map((f,i)=>(
-              <div key={f.id||i}style={{display:"flex",alignItems:"center",gap:6,background:"#f8fafc",borderRadius:8,padding:"7px 10px",border:"1px solid #e2e8f0"}}>
-                <span style={{fontSize:13,color:"#6366f1",fontWeight:700,width:20,textAlign:"center",flexShrink:0}}>{FIELD_TYPES.find(t=>t.type===f.type)?.icon}</span>
-                <input value={f.label||""}onChange={e=>updF(i,"label",e.target.value)}placeholder="Bezeichnung"style={{flex:1,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:12,fontWeight:600}}/>
-                {f.type==="formula"&&<input value={f.formula||""}onChange={e=>updF(i,"formula",e.target.value)}placeholder="z. B. PREIS_GESAMT * 0.1"style={{width:160,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11,fontFamily:"monospace"}}/>}
-                {f.type==="select"&&<input value={f.options||""}onChange={e=>updF(i,"options",e.target.value)}placeholder="A, B, C"style={{width:100,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11}}/>}
-                {(f.type==="number"||f.type==="text")&&<>
-                  <input value={f.prefix||""}onChange={e=>updF(i,"prefix",e.target.value)}placeholder="Präfix"style={{width:55,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11}}/>
-                  <input value={f.suffix||""}onChange={e=>updF(i,"suffix",e.target.value)}placeholder="Suffix"style={{width:55,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11}}/>
-                </>}
-                <button onClick={()=>setFields(fields.filter((_,j)=>j!==i))}style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"3px 8px",fontSize:12,cursor:"pointer",color:"#b91c1c",flexShrink:0}}>×</button>
-              </div>
-            ))}
+            {fields.map((f,i)=>{
+              const fmt={...DEFAULT_FMT,...(f.fmt||{})};
+              return(
+                <div key={f.id||i}style={{background:"#f8fafc",borderRadius:8,border:"1px solid #e2e8f0",overflow:"hidden"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,padding:"7px 10px",opacity:f.locked?0.6:1}}>
+                    <span style={{fontSize:13,color:"#6366f1",fontWeight:700,width:20,textAlign:"center",flexShrink:0}}>{FIELD_TYPES.find(t=>t.type===f.type)?.icon}</span>
+                    <input value={f.label||""}onChange={e=>updF(i,"label",e.target.value)}placeholder="Bezeichnung"readOnly={!!f.locked}style={{flex:1,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:12,fontWeight:600,background:f.locked?"#f1f5f9":"#fff"}}/>
+                    {f.type==="formula"&&<input value={f.formula||""}onChange={e=>updF(i,"formula",e.target.value)}placeholder="z. B. PREIS_GESAMT * 0.1"readOnly={!!f.locked}style={{width:160,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11,fontFamily:"monospace"}}/>}
+                    {f.type==="select"&&<input value={f.options||""}onChange={e=>updF(i,"options",e.target.value)}placeholder="A, B, C"readOnly={!!f.locked}style={{width:100,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11}}/>}
+                    {VL_TYPES.includes(f.type)&&(
+                      <select value={f.valueListId||""}onChange={e=>updF(i,"valueListId",e.target.value)}disabled={!!f.locked}style={{width:130,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11}}>
+                        <option value="">– Werteliste –</option>
+                        {vls.map(vl=><option key={vl.id}value={vl.id}>{vl.name}</option>)}
+                      </select>
+                    )}
+                    {(f.type==="number"||f.type==="text")&&<>
+                      <input value={f.prefix||""}onChange={e=>updF(i,"prefix",e.target.value)}placeholder="Präfix"readOnly={!!f.locked}style={{width:55,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11}}/>
+                      <input value={f.suffix||""}onChange={e=>updF(i,"suffix",e.target.value)}placeholder="Suffix"readOnly={!!f.locked}style={{width:55,border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:11}}/>
+                    </>}
+                    <div style={{display:"flex",alignItems:"center",gap:3,flexShrink:0,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 6px"}}>
+                      <span style={{fontSize:9,color:"#94a3b8",fontWeight:700}}>X</span>
+                      <input type="number"value={f.x!=null?f.x:""}onChange={e=>updF(i,"x",parseInt(e.target.value)||0)}placeholder="0"style={{width:44,border:"none",background:"transparent",fontSize:11,padding:"0 2px",outline:"none",textAlign:"right"}}/>
+                      <span style={{fontSize:9,color:"#94a3b8",fontWeight:700,marginLeft:4}}>Y</span>
+                      <input type="number"value={f.y!=null?f.y:""}onChange={e=>updF(i,"y",parseInt(e.target.value)||0)}placeholder="0"style={{width:44,border:"none",background:"transparent",fontSize:11,padding:"0 2px",outline:"none",textAlign:"right"}}/>
+                    </div>
+                    <button onClick={()=>updF(i,"locked",!f.locked)}title={f.locked?"Entsperren":"Sperren"}style={{background:f.locked?"#fef9c3":"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:12,cursor:"pointer",color:f.locked?"#b45309":"#94a3b8",flexShrink:0}}>{f.locked?"🔒":"🔓"}</button>
+                    <button onClick={()=>toggleFmt(i)}title="Formatierung"style={{background:openFmt[i]?"#ede9fe":"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:12,cursor:"pointer",color:"#6366f1",flexShrink:0}}>⚙</button>
+                    <button onClick={()=>toggleCond(i)}title="Bedingung"style={{background:openCond[i]?"#fef9c3":f.condition?.sourceField?"#fef08a":"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:12,cursor:"pointer",color:"#b45309",flexShrink:0,position:"relative"}}>
+                      ⚡{f.condition?.sourceField&&<span style={{position:"absolute",top:0,right:0,width:6,height:6,borderRadius:"50%",background:"#f59e0b",transform:"translate(50%,-50%)"}}/>}
+                    </button>
+                    {!f.locked&&<button onClick={()=>setFields(fields.filter((_,j)=>j!==i))}style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"3px 8px",fontSize:12,cursor:"pointer",color:"#b91c1c",flexShrink:0}}>×</button>}
+                    {f.locked&&<span style={{fontSize:14,flexShrink:0,padding:"0 4px"}}>🔒</span>}
+                  </div>
+                  {openFmt[i]&&(
+                    <div style={{borderTop:"1px solid #e2e8f0",background:"#fafafa",padding:"8px 12px",display:"flex",flexWrap:"wrap",gap:10,alignItems:"center"}}>
+                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                        <span style={{fontSize:10,color:"#666",fontWeight:700}}>Rahmen:</span>
+                        {[["T","borderTop"],["B","borderBottom"],["L","borderLeft"],["R","borderRight"]].map(([lbl,k])=>(
+                          <label key={k}style={{display:"flex",alignItems:"center",gap:2,fontSize:10,cursor:"pointer"}}>
+                            <input type="checkbox"checked={fmt[k]}onChange={e=>updFmt(i,k,e.target.checked)}style={{width:12,height:12}}/>{lbl}
+                          </label>
+                        ))}
+                        <input type="color"value={fmt.borderColor}onChange={e=>updFmt(i,"borderColor",e.target.value)}title="Rahmenfarbe"style={{width:22,height:20,border:"none",padding:0,cursor:"pointer"}}/>
+                      </div>
+                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                        <span style={{fontSize:10,color:"#666",fontWeight:700}}>Füllung:</span>
+                        <input type="color"value={fmt.fillColor}onChange={e=>updFmt(i,"fillColor",e.target.value)}style={{width:22,height:20,border:"none",padding:0,cursor:"pointer"}}/>
+                      </div>
+                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                        <span style={{fontSize:10,color:"#666",fontWeight:700}}>Schrift:</span>
+                        <input type="number"value={fmt.fontSize}min={8}max={24}onChange={e=>updFmt(i,"fontSize",parseInt(e.target.value)||12)}style={{width:42,border:"1px solid #e2e8f0",borderRadius:4,padding:"1px 4px",fontSize:11}}/>
+                        <label style={{display:"flex",alignItems:"center",gap:2,fontSize:10,cursor:"pointer"}}><input type="checkbox"checked={fmt.fontBold}onChange={e=>updFmt(i,"fontBold",e.target.checked)}style={{width:12,height:12}}/>B</label>
+                        <label style={{display:"flex",alignItems:"center",gap:2,fontSize:10,cursor:"pointer"}}><input type="checkbox"checked={fmt.fontItalic}onChange={e=>updFmt(i,"fontItalic",e.target.checked)}style={{width:12,height:12}}/><em>I</em></label>
+                        <input type="color"value={fmt.fontColor}onChange={e=>updFmt(i,"fontColor",e.target.value)}title="Textfarbe"style={{width:22,height:20,border:"none",padding:0,cursor:"pointer"}}/>
+                      </div>
+                      <div style={{display:"flex",gap:2,alignItems:"center"}}>
+                        <span style={{fontSize:10,color:"#666",fontWeight:700}}>Ausrichtung:</span>
+                        {[["L","left"],["M","center"],["R","right"]].map(([lbl,val])=>(
+                          <button key={val}onClick={()=>updFmt(i,"textAlign",val)}style={{background:fmt.textAlign===val?"#6366f1":"#f1f5f9",color:fmt.textAlign===val?"#fff":"#374151",border:"1px solid #e2e8f0",borderRadius:4,padding:"2px 7px",fontSize:11,cursor:"pointer",fontWeight:fmt.textAlign===val?700:400}}>{lbl}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {openCond[i]&&(
+                    <div style={{borderTop:"1px solid #e2e8f0",background:"#fffbeb",padding:"8px 12px",display:"flex",flexWrap:"wrap",gap:8,alignItems:"flex-end"}}>
+                      <div>
+                        <div style={{fontSize:9,fontWeight:700,color:"#b45309",marginBottom:2}}>Feld anzeigen wenn:</div>
+                        <select value={f.condition?.sourceField||""}onChange={e=>updCond(i,"sourceField",e.target.value)}style={{border:"1px solid #fbbf24",borderRadius:4,padding:"2px 5px",fontSize:11}}>
+                          <option value="">– Quellfeld –</option>
+                          {allFieldKeys.map(k=><option key={k.key}value={k.key}>{k.label}</option>)}
+                        </select>
+                      </div>
+                      <select value={f.condition?.operator||"="}onChange={e=>updCond(i,"operator",e.target.value)}style={{border:"1px solid #fbbf24",borderRadius:4,padding:"2px 5px",fontSize:11}}>
+                        {["=","≠",">","<","enthält","ist leer","ist nicht leer"].map(op=><option key={op}value={op}>{op}</option>)}
+                      </select>
+                      {!["ist leer","ist nicht leer"].includes(f.condition?.operator||"=")&&(
+                        <input value={f.condition?.value||""}onChange={e=>updCond(i,"value",e.target.value)}placeholder="Wert"style={{width:80,border:"1px solid #fbbf24",borderRadius:4,padding:"2px 5px",fontSize:11}}/>
+                      )}
+                      <div>
+                        <div style={{fontSize:9,fontWeight:700,color:"#b45309",marginBottom:2}}>Wenn FALSCH:</div>
+                        <select value={f.condition?.action||"Ausblenden"}onChange={e=>updCond(i,"action",e.target.value)}style={{border:"1px solid #fbbf24",borderRadius:4,padding:"2px 5px",fontSize:11}}>
+                          {["Ausblenden","Deaktivieren","Farbe ändern"].map(a=><option key={a}value={a}>{a}</option>)}
+                        </select>
+                      </div>
+                      {f.condition?.action==="Farbe ändern"&&(
+                        <div style={{display:"flex",alignItems:"center",gap:4}}>
+                          <span style={{fontSize:10,color:"#b45309"}}>Farbe:</span>
+                          <input type="color"value={f.condition?.color||"#ffe4e1"}onChange={e=>updCond(i,"color",e.target.value)}style={{width:28,height:22,border:"1px solid #fbbf24",padding:0,cursor:"pointer",borderRadius:3}}/>
+                        </div>
+                      )}
+                      <button onClick={()=>clearCond(i)}style={{background:"#fee2e2",border:"none",borderRadius:4,padding:"2px 8px",fontSize:11,cursor:"pointer",color:"#b91c1c"}}>Bedingung löschen</button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:18}}>
             <button onClick={onClose}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 16px",fontSize:13,cursor:"pointer"}}>Abbrechen</button>
@@ -397,9 +531,151 @@ function CustomSectionEditor({section,onSave,onClose}){
   );
 }
 
-function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapChange,layout,onLayoutChange}){
+function evalCondition(cond,data,felder){
+  if(!cond||!cond.sourceField)return true;
+  const raw=data?.[cond.sourceField]??felder?.[cond.sourceField]??"";
+  const val=String(raw);
+  const cv=String(cond.value||"");
+  switch(cond.operator){
+    case"=":return val===cv;
+    case"≠":return val!==cv;
+    case">":return parseFloat(val)>parseFloat(cv);
+    case"<":return parseFloat(val)<parseFloat(cv);
+    case"enthält":return val.includes(cv);
+    case"ist leer":return val.trim()==="";
+    case"ist nicht leer":return val.trim()!=="";
+    default:return true;
+  }
+}
+
+function Portal({relation,kundeData,onKundeDataChange,config}){
+  if(!kundeData)return null;
+  const cfg={rows:4,showScrollbar:true,allowNew:true,allowDelete:true,alternateRows:true,fields:[],...(config||{})};
+  const getRows=()=>{
+    if(!relation)return[];
+    if(relation.targetTable==="positionen")return kundeData.positionen||[];
+    if(relation.targetTable==="notizen")return _notizen[kundeData.id]||[];
+    return[];
+  };
+  const setRows=(rows)=>{
+    if(!relation)return;
+    if(relation.targetTable==="positionen"){onKundeDataChange&&onKundeDataChange({...kundeData,positionen:rows});}
+    else if(relation.targetTable==="notizen"){_notizen[kundeData.id]=rows;}
+  };
+  const rows=getRows();
+  const rowH=26;
+  const visibleH=cfg.rows*rowH+2;
+  const addRow=()=>{
+    const id=uid();
+    const newRow={id,kunde_id:kundeData.id};
+    cfg.fields.forEach(f=>{newRow[f.key]="";});
+    setRows([...rows,newRow]);
+    onKundeDataChange&&onKundeDataChange({...kundeData,positionen:relation.targetTable==="positionen"?[...rows,newRow]:kundeData.positionen});
+  };
+  const delRow=(i)=>{
+    const nr=rows.filter((_,j)=>j!==i);
+    setRows(nr);
+    if(relation.targetTable==="positionen")onKundeDataChange&&onKundeDataChange({...kundeData,positionen:nr});
+  };
+  const setCell=(i,k,v)=>{
+    const nr=[...rows];nr[i]={...nr[i],[k]:v};
+    setRows(nr);
+    if(relation.targetTable==="positionen")onKundeDataChange&&onKundeDataChange({...kundeData,positionen:nr});
+  };
+  const totalW=cfg.fields.reduce((s,f)=>s+(f.width||80),0)+(cfg.allowDelete?26:0);
+  return(
+    <div style={{marginBottom:6}}>
+      <div style={{display:"flex",background:"#dde0ee",border:"1px solid #aab",borderBottom:"none"}}>
+        {cfg.fields.map(f=>(
+          <div key={f.key}style={{width:f.width||80,flexShrink:0,padding:"2px 5px",fontWeight:700,fontSize:10,borderRight:"1px solid #aab",background:"#d0d4e8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.label}</div>
+        ))}
+        {cfg.allowDelete&&<div style={{width:26,flexShrink:0,background:"#d0d4e8"}}/>}
+        {cfg.showScrollbar&&<div style={{width:14,background:"#d0d4e8"}}/>}
+      </div>
+      <div style={{height:visibleH,overflowY:cfg.showScrollbar?"scroll":"hidden",border:"1px solid #aab",borderBottom:"none",boxSizing:"border-box"}}>
+        {rows.map((row,i)=>(
+          <div key={row.id||i}style={{display:"flex",height:rowH,background:cfg.alternateRows&&i%2===1?"#f0f4ff":"#fff",borderBottom:"1px solid #dde"}}>
+            {cfg.fields.map(f=>(
+              <div key={f.key}style={{width:f.width||80,flexShrink:0,borderRight:"1px solid #dde",overflow:"hidden"}}>
+                <input value={row[f.key]??""}onChange={e=>setCell(i,f.key,e.target.value)}
+                  style={{...S.cell,border:"none",background:"transparent",height:rowH-2,padding:"1px 4px",fontSize:11,width:"100%",boxSizing:"border-box"}}/>
+              </div>
+            ))}
+            {cfg.allowDelete&&(
+              <div style={{width:26,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <button onClick={()=>delRow(i)}style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:13,lineHeight:1,padding:0}}>×</button>
+              </div>
+            )}
+          </div>
+        ))}
+        {rows.length===0&&<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#94a3b8",fontSize:11}}>Keine Einträge</div>}
+      </div>
+      <div style={{display:"flex",alignItems:"center",border:"1px solid #aab",background:"#edf0f8",padding:"2px 6px",gap:6}}>
+        {cfg.allowNew&&<button onClick={addRow}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:3,padding:"1px 10px",fontSize:11,cursor:"pointer",fontWeight:700}}>+ Zeile</button>}
+        <span style={{fontSize:10,color:"#666"}}>{rows.length} Einträge</span>
+      </div>
+    </div>
+  );
+}
+
+function PortalEditor({section,onSave,onClose}){
+  const[cfg,setCfg]=useState({...(section.portalConfig||{})});
+  const upd=(k,v)=>setCfg(c=>({...c,[k]:v}));
+  const updField=(i,k,v)=>{const fs=[...(cfg.fields||[])];fs[i]={...fs[i],[k]:v};setCfg(c=>({...c,fields:fs}));};
+  const removeField=(i)=>{const fs=(cfg.fields||[]).filter((_,j)=>j!==i);setCfg(c=>({...c,fields:fs}));};
+  const addField=()=>setCfg(c=>({...c,fields:[...(c.fields||[]),{key:"neues_feld_"+uid(),label:"Neu",width:80}]}));
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1300}}>
+      <div style={{background:"#fff",borderRadius:14,width:520,maxHeight:"88vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
+        <div style={{display:"flex",alignItems:"center",padding:"14px 20px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2}}>
+          <span style={{fontWeight:700,fontSize:15,color:"#0f172a",flex:1}}>⚙ Portal konfigurieren</span>
+          <button onClick={onClose}style={{background:"#f1f5f9",border:"none",borderRadius:7,width:28,height:28,cursor:"pointer",fontSize:16,color:"#555"}}>×</button>
+        </div>
+        <div style={{padding:20}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"#555",display:"block",marginBottom:3}}>Sichtbare Zeilen (1–20)</label>
+              <input type="number"min={1}max={20}value={cfg.rows||4}onChange={e=>upd("rows",parseInt(e.target.value)||4)}style={{...S.cell}}/>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:5,paddingTop:14}}>
+              {[["showScrollbar","Scrollbar"],["alternateRows","Wechselfarben"],["allowNew","Neue Zeilen erlauben"],["allowDelete","Löschen erlauben"]].map(([k,l])=>(
+                <label key={k}style={{display:"flex",alignItems:"center",gap:6,fontSize:12,cursor:"pointer"}}>
+                  <input type="checkbox"checked={!!cfg[k]}onChange={e=>upd(k,e.target.checked)}style={{width:13,height:13}}/>{l}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div style={{fontSize:11,fontWeight:700,color:"#374151",marginBottom:8,textTransform:"uppercase",letterSpacing:".04em"}}>Spalten</div>
+          <div style={{display:"flex",flexDirection:"column",gap:5,marginBottom:10}}>
+            {(cfg.fields||[]).map((f,i)=>(
+              <div key={i}style={{display:"flex",gap:6,alignItems:"center",background:"#f8fafc",borderRadius:7,padding:"5px 8px",border:"1px solid #e2e8f0"}}>
+                <input value={f.key||""}onChange={e=>updField(i,"key",e.target.value)}placeholder="Feldschlüssel"style={{flex:1,...S.cell,fontSize:11,fontFamily:"monospace"}}/>
+                <input value={f.label||""}onChange={e=>updField(i,"label",e.target.value)}placeholder="Spaltenname"style={{flex:1,...S.cell,fontSize:11}}/>
+                <input type="number"value={f.width||80}onChange={e=>updField(i,"width",parseInt(e.target.value)||80)}placeholder="Breite"style={{width:60,...S.cell,fontSize:11}}/>
+                <button onClick={()=>removeField(i)}style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"2px 7px",fontSize:12,cursor:"pointer",color:"#b91c1c",flexShrink:0}}>×</button>
+              </div>
+            ))}
+          </div>
+          <button onClick={addField}style={{background:"#f5f3ff",border:"1px dashed #a5b4fc",borderRadius:7,padding:"5px 12px",fontSize:12,cursor:"pointer",color:"#6d28d9",fontWeight:600,marginBottom:16}}>+ Spalte hinzufügen</button>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:8}}>
+            <button onClick={onClose}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 16px",fontSize:13,cursor:"pointer"}}>Abbrechen</button>
+            <button onClick={()=>onSave({...section,portalConfig:cfg})}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,cursor:"pointer",fontWeight:700}}>✓ Speichern</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapChange,layout,onLayoutChange,labelOverrides,onLabelOverrideChange,valueLists,activeLayoutName,onSaveLayoutProfile}){
   const[editMode,setEditMode]=useState(false);
   const[editingSection,setEditingSection]=useState(null);
+  const[gridEnabled,setGridEnabled]=useState(false);
+  const[snapEnabled,setSnapEnabled]=useState(false);
+  const[showAlignDialog,setShowAlignDialog]=useState(false);
+  const[showTabOrder,setShowTabOrder]=useState(false);
+  const[tabOrder,setTabOrder]=useState(layout.tabOrder||[]);
+  const[showPrint,setShowPrint]=useState(false);
   const set=(k,v)=>onChange({...data,[k]:v});
   const setPos=(pos)=>onChange({...data,positionen:pos});
   const setZusatz=(zusatzposten)=>onChange({...data,zusatzposten});
@@ -429,16 +705,66 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
     const fid=f.field_id||f.id;
     const val=felder[fid]||"";
     const setVal=(v)=>onChange({...data,felder:{...felder,[fid]:v}});
-    const base={...S.cell};
+    // Conditional field control
+    if(f.condition&&f.condition.sourceField){
+      const condMet=evalCondition(f.condition,data,felder);
+      if(!condMet){
+        if(f.condition.action==="Ausblenden")return null;
+        if(f.condition.action==="Deaktivieren"){/* render below with disabled */}
+        // "Farbe ändern" handled via fillColor override below
+      }
+    }
+    const fmt={...DEFAULT_FMT,...(f.fmt||{})};
+    // Apply condition color override
+    const condActive=f.condition&&f.condition.sourceField&&!evalCondition(f.condition,data,felder);
+    const fillOverride=(condActive&&f.condition.action==="Farbe ändern"&&f.condition.color)?f.condition.color:fmt.fillColor;
+    const fmtStyle={
+      fontSize:fmt.fontSize,
+      fontWeight:fmt.fontBold?"bold":"normal",
+      fontStyle:fmt.fontItalic?"italic":"normal",
+      textAlign:fmt.textAlign,
+      color:fmt.fontColor,
+      background:fillOverride,
+      borderTop:fmt.borderTop?`1px solid ${fmt.borderColor}`:"none",
+      borderBottom:fmt.borderBottom?`1px solid ${fmt.borderColor}`:"none",
+      borderLeft:fmt.borderLeft?`1px solid ${fmt.borderColor}`:"none",
+      borderRight:fmt.borderRight?`1px solid ${fmt.borderColor}`:"none",
+      opacity:(condActive&&f.condition.action==="Deaktivieren")?0.4:1,
+    };
+    const isDisabled=condActive&&f.condition.action==="Deaktivieren";
+    const base={...S.cell,...fmtStyle};
     if(f.type==="formula"){
       const result=evalFormula(f.formula||"0",pos,felder);
       return<div style={{...base,background:"#ede9fe",color:"#5b21b6",fontWeight:700,fontFamily:"monospace",padding:"3px 6px"}}>{f.prefix||""}{result}{f.suffix||""}</div>;
     }
-    if(f.type==="number")return<div style={{display:"flex",alignItems:"center",gap:3}}>{f.prefix&&<span style={{fontSize:11,color:"#666"}}>{f.prefix}</span>}<input type="number"value={val}onChange={e=>setVal(e.target.value)}style={base}/>{f.suffix&&<span style={{fontSize:11,color:"#666"}}>{f.suffix}</span>}</div>;
-    if(f.type==="select")return<select value={val}onChange={e=>setVal(e.target.value)}style={base}><option value="">–</option>{(f.options||"").split(",").map(o=><option key={o.trim()}>{o.trim()}</option>)}</select>;
-    if(f.type==="check")return<label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12}}><input type="checkbox"checked={!!val}onChange={e=>setVal(e.target.checked)}style={{width:14,height:14}}/><span>{f.label}</span></label>;
-    if(f.type==="date")return<input type="date"value={val}onChange={e=>setVal(e.target.value)}style={base}/>;
-    return<input type="text"value={val}onChange={e=>setVal(e.target.value)}style={base}/>;
+    if(f.type==="number")return<div style={{display:"flex",alignItems:"center",gap:3}}>{f.prefix&&<span style={{fontSize:11,color:"#666"}}>{f.prefix}</span>}<input type="number"value={val}onChange={e=>setVal(e.target.value)}style={base}disabled={isDisabled}/>{f.suffix&&<span style={{fontSize:11,color:"#666"}}>{f.suffix}</span>}</div>;
+    if(f.type==="select")return<select value={val}onChange={e=>setVal(e.target.value)}style={base}disabled={isDisabled}><option value="">–</option>{(f.options||"").split(",").map(o=><option key={o.trim()}>{o.trim()}</option>)}</select>;
+    if(f.type==="check")return<label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:fmt.fontSize||12,opacity:isDisabled?0.4:1}}><input type="checkbox"checked={!!val}onChange={e=>setVal(e.target.checked)}style={{width:14,height:14}}disabled={isDisabled}/><span>{f.label}</span></label>;
+    if(f.type==="date")return<input type="date"value={val}onChange={e=>setVal(e.target.value)}style={base}disabled={isDisabled}/>;
+    const vls=valueLists||[];
+    if(f.type==="radio"){
+      const vl=vls.find(v=>v.id===f.valueListId);
+      const items=vl?vl.items:[];
+      return<div style={{...fmtStyle,padding:"2px 4px"}}>{items.map(it=><label key={it}style={{display:"flex",alignItems:"center",gap:4,fontSize:fmt.fontSize||12,cursor:"pointer",marginBottom:1}}><input type="radio"name={fid}value={it}checked={val===it}onChange={()=>setVal(it)}style={{width:13,height:13}}disabled={isDisabled}/>{it}</label>)}</div>;
+    }
+    if(f.type==="checkbox_list"){
+      const vl=vls.find(v=>v.id===f.valueListId);
+      const items=vl?vl.items:[];
+      const selected=(val||"").split(",").map(s=>s.trim()).filter(Boolean);
+      const toggle=(it)=>{if(!isDisabled){const ns=selected.includes(it)?selected.filter(s=>s!==it):[...selected,it];setVal(ns.join(", "));}};
+      return<div style={{...fmtStyle,padding:"2px 4px"}}>{items.map(it=><label key={it}style={{display:"flex",alignItems:"center",gap:4,fontSize:fmt.fontSize||12,cursor:"pointer",marginBottom:1}}><input type="checkbox"checked={selected.includes(it)}onChange={()=>toggle(it)}style={{width:13,height:13}}disabled={isDisabled}/>{it}</label>)}</div>;
+    }
+    if(f.type==="dropdown_vl"){
+      const vl=vls.find(v=>v.id===f.valueListId);
+      const items=vl?vl.items:[];
+      return<select value={val}onChange={e=>setVal(e.target.value)}style={base}disabled={isDisabled}><option value="">–</option>{items.map(it=><option key={it}value={it}>{it}</option>)}</select>;
+    }
+    if(f.type==="listbox"){
+      const vl=vls.find(v=>v.id===f.valueListId);
+      const items=vl?vl.items:[];
+      return<select multiple size={4}value={(val||"").split(",").map(s=>s.trim()).filter(Boolean)}onChange={e=>setVal(Array.from(e.target.selectedOptions).map(o=>o.value).join(", "))}style={{...base,height:"auto"}}disabled={isDisabled}>{items.map(it=><option key={it}value={it}>{it}</option>)}</select>;
+    }
+    return<input type="text"value={val}onChange={e=>setVal(e.target.value)}style={base}readOnly={isDisabled}/>;
   };
 
   const sectionContent=(s,idx)=>{
@@ -584,6 +910,10 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
         <Row><Lbl t="Camelia"/><Inp value={data.camelia}onChange={v=>set("camelia",v)}style={{width:130}}/><Lbl t="Vapiano Pflanzen"ml={10}/><Inp value={data.vapiano_pflanzen}onChange={v=>set("vapiano_pflanzen",v)}style={{...S.green,flex:1}}/></Row>
       );
       default:
+        if(s.isPortal){
+          const rel=_relations.find(r=>r.id===s.portalConfig?.relationId);
+          return<Portal relation={rel}kundeData={data}onKundeDataChange={onChange}config={s.portalConfig}/>;
+        }
         if(!s.custom)return null;
         return(
           <div style={{marginBottom:6}}>
@@ -601,43 +931,98 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
     }
   };
 
+  // Build a flat list of all field ids in layout order for tab-order
+  const allFieldIds=(()=>{
+    const ids=[];
+    (layout||[]).forEach(s=>{(s.fields||[]).forEach(f=>{ids.push({id:f.field_id||f.id,label:f.label,section:s.label});});});
+    return ids;
+  })();
+  const effectiveTabOrder=tabOrder.length>0?tabOrder:allFieldIds.map(f=>f.id);
+
+  // Group colors for visual grouping
+  const groupColors=["#6366f1","#059669","#f59e0b","#ec4899","#0891b2","#dc2626"];
+  const groups=[...new Set((layout||[]).map(s=>s.group).filter(Boolean))];
+  const groupColorMap=Object.fromEntries(groups.map((g,i)=>[g,groupColors[i%groupColors.length]]));
+
   return(
+    <LabelCtx.Provider value={{editMode,overrides:labelOverrides||{},onChange:onLabelOverrideChange}}>
     <div style={{background:"#f5f5f0",padding:"10px 14px",fontFamily:"Arial,sans-serif",minWidth:860,fontSize:12}}>
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,background:"#e0e0d8",padding:"3px 8px",border:"1px solid #ccc"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,background:"#e0e0d8",padding:"3px 8px",border:"1px solid #ccc",flexWrap:"wrap"}}>
         <span style={S.label}>Erstellungszeit</span>
         <input value={TODAY}readOnly style={{...S.cell,width:100}}/>
         <span style={S.label}>{new Date().toTimeString().slice(0,8)}</span>
+        {activeLayoutName&&<span style={{fontSize:10,color:"#666",background:"#f0ede8",border:"1px solid #ccc",borderRadius:3,padding:"1px 6px",marginLeft:4}}>{activeLayoutName}</span>}
         <div style={{flex:1}}/>
-        {saving&&<span style={{fontSize:11,color:"#059669",fontWeight:700}}>💾 Speichern…</span>}
+        {saving&&<span style={{fontSize:11,color:"#059669",fontWeight:700}}>Speichern…</span>}
+        {editMode&&<button onClick={()=>setGridEnabled(g=>!g)}style={{background:gridEnabled?"#6366f1":"#f1f5f9",color:gridEnabled?"#fff":"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer",fontWeight:gridEnabled?700:400}}>&#9638; Raster</button>}
+        {editMode&&<button onClick={()=>setSnapEnabled(g=>!g)}style={{background:snapEnabled?"#6366f1":"#f1f5f9",color:snapEnabled?"#fff":"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer",fontWeight:snapEnabled?700:400}}>&#8857; Einrasten</button>}
+        {editMode&&<button onClick={()=>setShowAlignDialog(true)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer"}}>Ausrichten</button>}
+        {editMode&&<button onClick={()=>setShowTabOrder(true)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer"}}>Tab-Reihenfolge</button>}
+        {editMode&&onSaveLayoutProfile&&<button onClick={onSaveLayoutProfile}style={{background:"#0891b2",color:"#fff",border:"none",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer",fontWeight:700}}>Layout speichern</button>}
+        <button onClick={()=>setShowPrint(true)}style={{background:"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>🖨 Drucken</button>
         <button onClick={()=>setEditMode(m=>!m)}style={{background:editMode?"#f59e0b":"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>
           {editMode?"✓ Fertig":"✏ Layout"}
         </button>
         <button onClick={onSave}style={{background:"#059669",color:"#fff",border:"none",borderRadius:6,padding:"3px 14px",fontSize:12,cursor:"pointer",fontWeight:700}}>Speichern</button>
       </div>
       {/* Layout-gesteuerte Abschnitte */}
-      {(layout||[]).map((s,idx)=>(
-        <div key={s.id} style={{marginBottom:editMode?3:0,outline:editMode?"2px dashed #6366f144":"none",borderRadius:editMode?4:0}}>
+      <div style={{position:"relative",
+        backgroundImage:gridEnabled?"radial-gradient(circle,#aaa 1px,transparent 1px)":"none",
+        backgroundSize:"8px 8px",backgroundPosition:"0 0"}}>
+      {(layout||[]).map((s,idx)=>{
+        const isLocked=!!s.locked;
+        const grpColor=s.group?groupColorMap[s.group]:null;
+        return(
+        <div key={s.id} style={{marginBottom:editMode?3:0,outline:editMode?"2px dashed #6366f144":"none",borderRadius:editMode?4:0,
+          borderLeft:grpColor?`4px solid ${grpColor}`:"none",paddingLeft:grpColor&&!editMode?4:0,
+          position:"relative"}}>
+          {grpColor&&editMode&&<div style={{position:"absolute",left:-2,top:0,bottom:0,width:4,background:grpColor,borderRadius:2,opacity:.7}}/>}
           {editMode&&(
-            <div style={{display:"flex",alignItems:"center",gap:3,background:"#1e293b",padding:"2px 8px",borderRadius:"4px 4px 0 0",userSelect:"none"}}>
-              {s.custom
+            <div style={{display:"flex",alignItems:"center",gap:3,background:isLocked?"#334155":"#1e293b",padding:"2px 8px",borderRadius:"4px 4px 0 0",userSelect:"none",opacity:isLocked?.75:1}}>
+              {s.custom&&!isLocked
                 ?<input value={s.label}onChange={e=>{const l=[...layout];l[idx]={...l[idx],label:e.target.value};onLayoutChange(l);}}
                    style={{background:"transparent",border:"none",color:"#e2e8f0",fontSize:11,fontWeight:700,flex:1,outline:"none"}}/>
-                :<span style={{fontSize:11,color:"#94a3b8",flex:1}}>{s.label}</span>
+                :<span style={{fontSize:11,color:isLocked?"#94a3b8":"#94a3b8",flex:1}}>{s.label}{isLocked&&" 🔒"}</span>
               }
-              {s.custom&&<button onClick={()=>setEditingSection(idx)}style={{background:"#6366f1",border:"none",color:"#fff",borderRadius:3,padding:"1px 8px",fontSize:10,cursor:"pointer",fontWeight:700}}>✎ Felder</button>}
+              {s.group&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:grpColor+"33",color:grpColor,border:`1px solid ${grpColor}66`,flexShrink:0}}>{s.group}</span>}
+              {(()=>{const pt=PART_TYPES.find(p=>p.type===(s.partType||"body"));return pt?(
+                <span style={{fontSize:9,fontWeight:700,padding:"1px 6px",borderRadius:3,background:pt.color+"44",color:pt.color,border:`1px solid ${pt.color}88`,flexShrink:0,letterSpacing:".03em"}}>{pt.label}</span>
+              ):null;})()}
+              {!isLocked&&(s.isPortal
+                ?<button onClick={()=>setEditingSection(idx)}style={{background:"#0891b2",border:"none",color:"#fff",borderRadius:3,padding:"1px 8px",fontSize:10,cursor:"pointer",fontWeight:700}}>⚙ Portal</button>
+                :<button onClick={()=>setEditingSection(idx)}style={{background:"#6366f1",border:"none",color:"#fff",borderRadius:3,padding:"1px 8px",fontSize:10,cursor:"pointer",fontWeight:700}}>✎ Felder</button>
+              )}
               <button onClick={()=>toggleVisible(idx)}title={s.visible?"Ausblenden":"Einblenden"}style={{background:"none",border:"none",color:s.visible?"#4ade80":"#f87171",cursor:"pointer",fontSize:12,padding:"0 4px"}}>{s.visible?"●":"○"}</button>
-              <button onClick={()=>moveUp(idx)}disabled={idx===0}style={{background:"none",border:"none",color:idx===0?"#334155":"#94a3b8",cursor:idx===0?"default":"pointer",fontSize:13,padding:"0 2px"}}>↑</button>
-              <button onClick={()=>moveDown(idx)}disabled={idx===layout.length-1}style={{background:"none",border:"none",color:idx===layout.length-1?"#334155":"#94a3b8",cursor:idx===layout.length-1?"default":"pointer",fontSize:13,padding:"0 2px"}}>↓</button>
-              {s.custom&&<button onClick={()=>deleteSection(idx)}style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:13,padding:"0 2px"}}>🗑</button>}
+              <button onClick={()=>{const l=[...layout];l[idx]={...l[idx],locked:!isLocked};onLayoutChange(l);}}title={isLocked?"Entsperren":"Sperren"}style={{background:"none",border:"none",color:isLocked?"#fbbf24":"#64748b",cursor:"pointer",fontSize:12,padding:"0 2px"}}>{isLocked?"🔒":"🔓"}</button>
+              {!isLocked&&<button onClick={()=>moveUp(idx)}disabled={idx===0}style={{background:"none",border:"none",color:idx===0?"#334155":"#94a3b8",cursor:idx===0?"default":"pointer",fontSize:13,padding:"0 2px"}}>↑</button>}
+              {!isLocked&&<button onClick={()=>moveDown(idx)}disabled={idx===layout.length-1}style={{background:"none",border:"none",color:idx===layout.length-1?"#334155":"#94a3b8",cursor:idx===layout.length-1?"default":"pointer",fontSize:13,padding:"0 2px"}}>↓</button>}
+              {!isLocked&&<button onClick={()=>{const g=prompt("Gruppenname (leer = keine Gruppe):",s.group||"");if(g!==null){const l=[...layout];l[idx]={...l[idx],group:g.trim()||null};onLayoutChange(l);}}}title="Gruppe"style={{background:"none",border:"none",color:"#a5b4fc",cursor:"pointer",fontSize:10,padding:"0 2px"}}>⊞</button>}
+              {!isLocked&&s.custom&&<button onClick={()=>deleteSection(idx)}style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:13,padding:"0 2px"}}>🗑</button>}
             </div>
           )}
           {(s.visible||editMode)&&(
             <div style={{opacity:s.visible?1:.3,pointerEvents:s.visible?"auto":"none"}}>
               {sectionContent(s,idx)}
+              {!s.custom&&(s.fields||[]).length>0&&(
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,background:"#fafafa",border:"1px solid #e2e8f0",borderRadius:4,padding:"6px 8px",marginTop:4}}>
+                  {(s.fields||[]).map((f,fi)=>{
+                    const tIdx=effectiveTabOrder.indexOf(f.field_id||f.id);
+                    return(
+                      <div key={f.id||f.field_id}style={{position:"relative"}}>
+                        {editMode&&tIdx>=0&&<span style={{position:"absolute",top:0,right:0,fontSize:9,background:"#6366f1",color:"#fff",borderRadius:"0 0 0 4px",padding:"0 4px",zIndex:1}}>{tIdx+1}</span>}
+                        {f.type!=="check"&&<div style={{...S.label,marginBottom:2}}>{f.label}</div>}
+                        {renderField(f)}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
+      </div>
 
       {editMode&&(
         <button onClick={addCustomSection}style={{width:"100%",background:"#f8fafc",border:"2px dashed #6366f1",borderRadius:8,padding:"8px",fontSize:12,cursor:"pointer",color:"#6366f1",fontWeight:700,marginTop:6}}>
@@ -645,9 +1030,150 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
         </button>
       )}
       {editingSection!==null&&(
-        <CustomSectionEditor section={layout[editingSection]}onSave={(updated)=>saveSection(editingSection,updated)}onClose={()=>setEditingSection(null)}/>
+        layout[editingSection]?.isPortal
+          ?<PortalEditor section={layout[editingSection]}onSave={(updated)=>saveSection(editingSection,updated)}onClose={()=>setEditingSection(null)}/>
+          :<CustomSectionEditor section={layout[editingSection]}onSave={(updated)=>saveSection(editingSection,updated)}onClose={()=>setEditingSection(null)}valueLists={valueLists}/>
+      )}
+
+      {/* Ausrichten Dialog */}
+      {showAlignDialog&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1400}}>
+          <div style={{background:"#fff",borderRadius:13,width:420,boxShadow:"0 16px 48px rgba(0,0,0,.3)"}}>
+            <div style={{display:"flex",alignItems:"center",padding:"13px 18px",borderBottom:"1px solid #f1f5f9"}}>
+              <span style={{fontWeight:700,fontSize:14,flex:1}}>Objekte ausrichten</span>
+              <button onClick={()=>setShowAlignDialog(false)}style={{background:"#f1f5f9",border:"none",borderRadius:7,width:27,height:27,cursor:"pointer",fontSize:15,color:"#555"}}>×</button>
+            </div>
+            <div style={{padding:18}}>
+              <div style={{fontSize:11,color:"#64748b",background:"#fef9c3",border:"1px solid #fbbf24",borderRadius:7,padding:"7px 11px",marginBottom:14}}>
+                Mehrere Felder markieren zum Ausrichten
+              </div>
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#374151",marginBottom:7,textTransform:"uppercase",letterSpacing:".04em"}}>Horizontal</div>
+                <div style={{display:"flex",gap:7}}>
+                  {[["⬛◻◻","Linksbündig"],["◻⬛◻","Zentriert"],["◻◻⬛","Rechtsbündig"],["◻|◻|◻","Gleiche Abstände"]].map(([ic,lb])=>(
+                    <button key={lb}style={{flex:1,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:7,padding:"8px 4px",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,color:"#374151"}}>
+                      <span style={{fontSize:14}}>{ic}</span>{lb}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:11,fontWeight:700,color:"#374151",marginBottom:7,textTransform:"uppercase",letterSpacing:".04em"}}>Vertikal</div>
+                <div style={{display:"flex",gap:7}}>
+                  {[["⬛▪▪","Oben"],["▪⬛▪","Mitte"],["▪▪⬛","Unten"],["▪—▪—▪","Gleiche Abstände"]].map(([ic,lb])=>(
+                    <button key={lb}style={{flex:1,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:7,padding:"8px 4px",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,color:"#374151"}}>
+                      <span style={{fontSize:14}}>{ic}</span>{lb}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"flex-end"}}>
+                <button onClick={()=>setShowAlignDialog(false)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 16px",fontSize:13,cursor:"pointer"}}>Schließen</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab-Reihenfolge Dialog */}
+      {showTabOrder&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1400}}>
+          <div style={{background:"#fff",borderRadius:13,width:480,maxHeight:"82vh",overflow:"auto",boxShadow:"0 16px 48px rgba(0,0,0,.3)"}}>
+            <div style={{display:"flex",alignItems:"center",padding:"13px 18px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2}}>
+              <span style={{fontWeight:700,fontSize:14,flex:1}}>Tab-Reihenfolge festlegen</span>
+              <button onClick={()=>setShowTabOrder(false)}style={{background:"#f1f5f9",border:"none",borderRadius:7,width:27,height:27,cursor:"pointer",fontSize:15,color:"#555"}}>×</button>
+            </div>
+            <div style={{padding:18}}>
+              {allFieldIds.length===0&&<div style={{textAlign:"center",color:"#94a3b8",fontSize:12,padding:"24px 0"}}>Keine Felder in den Abschnitten gefunden.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                {effectiveTabOrder.map((fid,i)=>{
+                  const fi=allFieldIds.find(f=>f.id===fid);
+                  if(!fi)return null;
+                  const isIncluded=!tabOrder.includes(fid+"__excl");
+                  return(
+                    <div key={fid}style={{display:"flex",alignItems:"center",gap:8,background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:7,padding:"6px 10px"}}>
+                      <span style={{width:22,height:22,background:"#6366f1",color:"#fff",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0}}>{i+1}</span>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:12,fontWeight:600,color:"#0f172a"}}>{fi.label}</div>
+                        <div style={{fontSize:10,color:"#94a3b8"}}>{fi.section}</div>
+                      </div>
+                      <label style={{display:"flex",alignItems:"center",gap:4,fontSize:11,cursor:"pointer",color:"#374151"}}>
+                        <input type="checkbox"checked={isIncluded}onChange={e=>{
+                          const excl=fid+"__excl";
+                          setTabOrder(prev=>e.target.checked?prev.filter(x=>x!==excl):[...prev.filter(x=>x!==excl),excl]);
+                        }}style={{width:13,height:13}}/>inkl.
+                      </label>
+                      <button disabled={i===0}onClick={()=>{const o=[...effectiveTabOrder];[o[i-1],o[i]]=[o[i],o[i-1]];setTabOrder(o);}}style={{background:"none",border:"none",cursor:i===0?"default":"pointer",color:i===0?"#cbd5e1":"#6366f1",fontSize:14,padding:"0 2px"}}>↑</button>
+                      <button disabled={i===effectiveTabOrder.length-1}onClick={()=>{const o=[...effectiveTabOrder];[o[i+1],o[i]]=[o[i],o[i+1]];setTabOrder(o);}}style={{background:"none",border:"none",cursor:i===effectiveTabOrder.length-1?"default":"pointer",color:i===effectiveTabOrder.length-1?"#cbd5e1":"#6366f1",fontSize:14,padding:"0 2px"}}>↓</button>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:14}}>
+                <button onClick={()=>setTabOrder([])}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 14px",fontSize:12,cursor:"pointer"}}>Standard wiederherstellen</button>
+                <button onClick={()=>setShowTabOrder(false)}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,cursor:"pointer",fontWeight:700}}>✓ Übernehmen</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Print Preview Modal */}
+      {showPrint&&(
+        <>
+          <style>{`@media print{body>*{display:none!important;}.print-preview-content{display:block!important;position:static!important;width:100%!important;max-width:none!important;}}`}</style>
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:9999,overflow:"auto",display:"flex",flexDirection:"column",alignItems:"center",padding:"20px 0"}}>
+            <div style={{display:"flex",gap:8,marginBottom:12,flexShrink:0}}>
+              <button onClick={()=>window.print()}style={{background:"#059669",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:13,cursor:"pointer",fontWeight:700}}>🖨 Drucken</button>
+              <button onClick={()=>setShowPrint(false)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #ccc",borderRadius:7,padding:"7px 16px",fontSize:13,cursor:"pointer"}}>Schließen</button>
+            </div>
+            <div className="print-preview-content"style={{width:794,background:"#fff",boxShadow:"0 8px 40px rgba(0,0,0,.5)",padding:"28px 32px",fontFamily:"Arial,sans-serif",fontSize:11,color:"#111"}}>
+              {(()=>{
+                const partOrder=["title_header","header","subsummary_above","body","subsummary_below","summary","footer","title_footer"];
+                const sorted=[...layout].sort((a,b)=>partOrder.indexOf(a.partType||"body")-partOrder.indexOf(b.partType||"body"));
+                return sorted.filter(s=>s.visible).map((s,i)=>{
+                  const pt=PART_TYPES.find(p=>p.type===(s.partType||"body"));
+                  const isRepeat=["header","footer","title_header","title_footer"].includes(s.partType);
+                  const isSub=["subsummary_above","subsummary_below"].includes(s.partType);
+                  const isSummary=s.partType==="summary";
+                  return(
+                    <div key={s.id}style={{marginBottom:10,pageBreakInside:"avoid"}}>
+                      {i>0&&pt&&<div style={{borderTop:"1px dashed #ccc",marginBottom:6,paddingTop:4,fontSize:9,color:"#aaa",letterSpacing:".04em",textTransform:"uppercase"}}>{pt.label}</div>}
+                      {isRepeat&&<div style={{fontSize:9,color:"#999",fontStyle:"italic",marginBottom:4,textAlign:"center"}}>— wiederholt auf jeder Seite —</div>}
+                      {isSub&&<div style={{fontSize:9,color:"#999",fontStyle:"italic",textAlign:"center",padding:"4px",background:"#f0f4ff",borderRadius:3,marginBottom:4}}>— gruppiert nach Feld —</div>}
+                      {isSummary?(
+                        <div style={{background:"#f0fff0",border:"1px solid #99cc99",padding:"6px 10px",borderRadius:3}}>
+                          <div style={{fontWeight:700,fontSize:11,marginBottom:3}}>Zusammenfassung</div>
+                          <div style={{display:"flex",gap:16,fontSize:11}}>
+                            <span>Endsumme netto: <strong>{fmt2((pos.reduce((s,p)=>s+(parseFloat(p.preis)||0),0)/rabattFak)+transPreis+duengerP+zusatzSumme)} €</strong></span>
+                            <span>Gesamt (inkl. 19%): <strong>{fmt2(endsumme)} €</strong></span>
+                          </div>
+                        </div>
+                      ):(
+                        <div style={{fontSize:11}}>
+                          <strong style={{fontSize:10,color:"#555"}}>{s.label}</strong>
+                          <div style={{marginTop:2,paddingLeft:4,color:"#333"}}>
+                            {s.id==="adresse"&&<span>{data.firma||data.vorname} · {data.strasse} · {data.plz} {data.ort}</span>}
+                            {s.id==="kopf"&&<span>Jahr: {data.jahr} | Code: {data.code} | {data.auslieferung_abholung?"Lieferdatum: "+data.auslieferung_abholung:""}</span>}
+                            {s.id==="bemerkungen_aktuell"&&<span>{data.bemerkungen_aktuell}</span>}
+                            {s.id==="positionen"&&<span>{pos.filter(p=>p.art).map(p=>`${p.label}: ${p.art} (${p.cm}cm, ${p.anzahl}x, ${fmt2(p.preis)}€)`).join(" | ")}</span>}
+                            {s.id==="transport"&&<span>{data.trans_txt} {data.trans_preis?fmt2(data.trans_preis)+" €":""}</span>}
+                            {s.id==="duenger"&&<span>{data.duenger_txt} {data.duenger_preis?fmt2(data.duenger_preis)+" €":""}</span>}
+                            {s.id==="rabatt"&&<span>{data.rabatt_txt} {data.gutschein?"| Gutschein: "+data.gutschein:""}</span>}
+                            {s.id==="sonstiges"&&<span>{data.camelia} {data.vapiano_pflanzen}</span>}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        </>
       )}
     </div>
+    </LabelCtx.Provider>
   );
 }
 
@@ -774,6 +1300,84 @@ function FormularBuilder({schema,setSchema,onClose,onSave}){
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ValueListManager({valueLists,onChange,onClose}){
+  const[lists,setLists]=useState(valueLists||[]);
+  const[editId,setEditId]=useState(null);
+  const[draftName,setDraftName]=useState("");
+  const[draftItems,setDraftItems]=useState("");
+
+  const openEdit=(vl)=>{setEditId(vl.id);setDraftName(vl.name);setDraftItems(vl.items.join("\n"));};
+  const openNew=()=>{const id="vl_"+uid();setLists(prev=>[...prev,{id,name:"Neue Liste",items:[]}]);setEditId(id);setDraftName("Neue Liste");setDraftItems("");};
+  const saveEdit=()=>{
+    const items=draftItems.split("\n").map(s=>s.trim()).filter(Boolean);
+    const updated=lists.map(vl=>vl.id===editId?{...vl,name:draftName,items}:vl);
+    setLists(updated);onChange(updated);setEditId(null);
+  };
+  const deleteList=(id)=>{const updated=lists.filter(vl=>vl.id!==id);setLists(updated);onChange(updated);if(editId===id)setEditId(null);};
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1300}}>
+      <div style={{background:"#fff",borderRadius:14,width:620,maxHeight:"88vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
+        <div style={{display:"flex",alignItems:"center",padding:"14px 20px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2,gap:8}}>
+          <span style={{fontWeight:700,fontSize:15,color:"#0f172a",flex:1}}>Wertelisten verwalten</span>
+          <button onClick={onClose}style={{background:"#f1f5f9",border:"none",borderRadius:7,width:28,height:28,cursor:"pointer",fontSize:16,color:"#555"}}>×</button>
+        </div>
+        <div style={{padding:20,display:"flex",gap:14}}>
+          {/* List of value lists */}
+          <div style={{width:200,flexShrink:0}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#374151",textTransform:"uppercase",letterSpacing:".05em",marginBottom:8}}>Listen ({lists.length})</div>
+            <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:10}}>
+              {lists.map(vl=>(
+                <div key={vl.id}style={{display:"flex",alignItems:"center",gap:4,background:editId===vl.id?"#ede9fe":"#f8fafc",border:`1px solid ${editId===vl.id?"#a5b4fc":"#e2e8f0"}`,borderRadius:7,padding:"5px 9px",cursor:"pointer"}}
+                  onClick={()=>openEdit(vl)}>
+                  <div style={{flex:1,overflow:"hidden"}}>
+                    <div style={{fontSize:12,fontWeight:600,color:editId===vl.id?"#4f46e5":"#374151",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{vl.name}</div>
+                    <div style={{fontSize:10,color:"#94a3b8"}}>{vl.items.length} Einträge</div>
+                  </div>
+                  <button onClick={e=>{e.stopPropagation();deleteList(vl.id)}}style={{background:"none",border:"none",color:"#f87171",cursor:"pointer",fontSize:13,padding:"0 2px",flexShrink:0}}>×</button>
+                </div>
+              ))}
+              {lists.length===0&&<div style={{fontSize:11,color:"#94a3b8",textAlign:"center",padding:"12px 0"}}>Keine Listen</div>}
+            </div>
+            <button onClick={openNew}style={{width:"100%",background:"#f5f3ff",border:"1px dashed #a5b4fc",borderRadius:7,padding:"6px",fontSize:12,cursor:"pointer",color:"#6d28d9",fontWeight:600}}>+ Neue Liste</button>
+          </div>
+          {/* Editor */}
+          <div style={{flex:1}}>
+            {editId?(()=>{
+              return(
+                <div>
+                  <div style={{marginBottom:10}}>
+                    <label style={{fontSize:11,fontWeight:700,color:"#555",display:"block",marginBottom:3}}>Listenname</label>
+                    <input value={draftName}onChange={e=>setDraftName(e.target.value)}style={{...S.cell,fontWeight:600,fontSize:13}}/>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <label style={{fontSize:11,fontWeight:700,color:"#555",display:"block",marginBottom:3}}>Einträge (ein Eintrag pro Zeile)</label>
+                    <textarea value={draftItems}onChange={e=>setDraftItems(e.target.value)}rows={10}
+                      placeholder={"Ja\nNein\nVielleicht"}
+                      style={{...S.cell,resize:"vertical",fontFamily:"inherit",lineHeight:1.7}}/>
+                    <div style={{fontSize:10,color:"#94a3b8",marginTop:3}}>
+                      {draftItems.split("\n").filter(s=>s.trim()).length} Einträge
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                    <button onClick={()=>setEditId(null)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"7px 14px",fontSize:13,cursor:"pointer"}}>Abbrechen</button>
+                    <button onClick={saveEdit}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,cursor:"pointer",fontWeight:700}}>✓ Speichern</button>
+                  </div>
+                </div>
+              );
+            })():(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",minHeight:200,color:"#94a3b8",fontSize:12,flexDirection:"column",gap:8}}>
+                <div style={{fontSize:28}}>📋</div>
+                <div>Liste auswählen oder neue erstellen</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1053,6 +1657,11 @@ export default function App(){
   const[customPages,setCustomPages]=useState([]);
   const[page,setPage]=useState("stammblatt");
   const[err,setErr]=useState(null);
+  const[labelOverrides,setLabelOverrides]=useState({});
+  const[valueLists,setValueLists]=useState([..._valueLists]);
+  const[layouts,setLayouts]=useState([..._layouts]);
+  const[activeLayoutId,setActiveLayoutId]=useState("layout_main");
+  const[editingLayoutName,setEditingLayoutName]=useState(null);
   const sbRef=useRef(sb);
 
   const onConnect=useCallback(async()=>{
@@ -1132,6 +1741,61 @@ export default function App(){
     setLayout([...l]);
   };
 
+  const handleLabelOverrideChange=(overrides)=>{
+    _labelConfig=overrides;
+    setLabelOverrides({...overrides});
+  };
+
+  const switchLayout=(lid)=>{
+    const lp=layouts.find(l=>l.id===lid);
+    if(!lp)return;
+    setActiveLayoutId(lid);
+    handleLayoutChange([...lp.config]);
+    handleLabelOverrideChange({...(lp.labelOverrides||{})});
+  };
+
+  const saveCurrentLayoutProfile=()=>{
+    const updated=layouts.map(lp=>lp.id===activeLayoutId?{...lp,config:[...layout],labelOverrides:{...labelOverrides}}:lp);
+    _layouts=updated;
+    setLayouts(updated);
+  };
+
+  const duplicateLayout=(lid)=>{
+    const src=layouts.find(l=>l.id===lid);
+    if(!src)return;
+    const newId="layout_"+uid();
+    const copy={...src,id:newId,name:src.name+" (Kopie)",config:[...src.config],labelOverrides:{...(src.labelOverrides||{})}};
+    const updated=[...layouts,copy];
+    _layouts=updated;
+    setLayouts(updated);
+  };
+
+  const deleteLayout=(lid)=>{
+    if(layouts.length<=1){alert("Das letzte Layout kann nicht gelöscht werden.");return;}
+    if(!confirm("Layout wirklich löschen?"))return;
+    const updated=layouts.filter(l=>l.id!==lid);
+    _layouts=updated;
+    setLayouts(updated);
+    if(activeLayoutId===lid)switchLayout(updated[0].id);
+  };
+
+  const renameLayout=(lid,name)=>{
+    const updated=layouts.map(l=>l.id===lid?{...l,name}:l);
+    _layouts=updated;
+    setLayouts(updated);
+  };
+
+  const addNewLayout=()=>{
+    const src=layouts.find(l=>l.id===activeLayoutId)||layouts[0];
+    const newId="layout_"+uid();
+    const copy={...src,id:newId,name:"Neues Layout",config:[...src.config],labelOverrides:{...(src.labelOverrides||{})}};
+    const updated=[...layouts,copy];
+    _layouts=updated;
+    setLayouts(updated);
+    setEditingLayoutName(newId);
+    switchLayout(newId);
+  };
+
   const addCustomPage=()=>{
     const id="cp_"+uid();
     const np={id,name:"Neue Seite",fields:[]};
@@ -1154,6 +1818,11 @@ export default function App(){
   const renameCustomPage=(id,name)=>{
     _customPages=_customPages.map(p=>p.id===id?{...p,name}:p);
     setCustomPages([..._customPages]);
+  };
+
+  const handleValueListChange=(lists)=>{
+    _valueLists=[...lists];
+    setValueLists([...lists]);
   };
 
   const saveTour=async(tour)=>{
@@ -1190,6 +1859,24 @@ export default function App(){
             <span>+</span>Neue Seite
           </button>
         </div>
+        <div style={{padding:"6px 6px",overflowY:"auto",borderBottom:"1px solid #333"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"3px 6px 4px"}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#a5b4fc",textTransform:"uppercase",letterSpacing:".08em"}}>Layouts ({layouts.length})</div>
+            <button onClick={addNewLayout}title="Neues Layout"style={{background:"none",border:"none",color:"#a5b4fc",cursor:"pointer",fontSize:13,padding:0,lineHeight:1}}>➕</button>
+          </div>
+          {layouts.map(lp=>(
+            <div key={lp.id}style={{display:"flex",alignItems:"center",gap:2,borderRadius:5,background:activeLayoutId===lp.id?"rgba(99,102,241,.22)":"transparent",borderLeft:activeLayoutId===lp.id?"3px solid #6366f1":"3px solid transparent",paddingLeft:2,marginBottom:1}}>
+              {editingLayoutName===lp.id
+                ?<input autoFocus value={lp.name}onChange={e=>renameLayout(lp.id,e.target.value)}onBlur={()=>setEditingLayoutName(null)}onKeyDown={e=>e.key==="Enter"&&setEditingLayoutName(null)}
+                    style={{flex:1,background:"#1e1e3a",border:"1px solid #6366f1",borderRadius:4,color:"#e2e8f0",fontSize:11,padding:"2px 5px",outline:"none"}}/>
+                :<button onClick={()=>switchLayout(lp.id)}style={{flex:1,background:"none",border:"none",color:activeLayoutId===lp.id?"#a5b4fc":"#666",cursor:"pointer",fontSize:11,textAlign:"left",padding:"4px 4px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:activeLayoutId===lp.id?700:400}}>{lp.name}</button>
+              }
+              <button onClick={()=>setEditingLayoutName(lp.id)}title="Umbenennen"style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:10,padding:"0 2px",flexShrink:0}}>✎</button>
+              <button onClick={()=>duplicateLayout(lp.id)}title="Duplizieren"style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>⧉</button>
+              {layouts.length>1&&<button onClick={()=>deleteLayout(lp.id)}title="Löschen"style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>×</button>}
+            </div>
+          ))}
+        </div>
         <div style={{padding:"6px 6px",flex:1,overflowY:"auto"}}>
           <div style={{fontSize:9,fontWeight:700,color:"#4ade80",textTransform:"uppercase",letterSpacing:".08em",padding:"4px 6px"}}>Datensätze ({kunden.length})</div>
           {kunden.map(k=>(
@@ -1203,6 +1890,7 @@ export default function App(){
         <div style={{padding:"8px",borderTop:"1px solid #333",display:"flex",flexDirection:"column",gap:5}}>
           <button onClick={newKunde}style={{background:"#00cc00",color:"#fff",border:"none",borderRadius:6,padding:"7px",fontSize:12,cursor:"pointer",fontWeight:700}}>+ Neu</button>
           <button onClick={()=>setModal("builder")}style={{background:"rgba(99,102,241,.25)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,.3)",borderRadius:6,padding:"5px",fontSize:11,cursor:"pointer"}}>⚙ Felder-Builder</button>
+          <button onClick={()=>setModal("valuelists")}style={{background:"rgba(99,102,241,.15)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,.25)",borderRadius:6,padding:"5px",fontSize:11,cursor:"pointer"}}>📋 Wertelisten</button>
         </div>
       </div>
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -1234,7 +1922,7 @@ export default function App(){
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#555",fontSize:14}}>Lade…</div>
           ):page==="stammblatt"?(
             activeData?(
-              <Stammblatt data={activeData}schema={schema}onChange={setActiveData}onSave={saveKunde}saving={saving}formulaMap={formulaMap}onFormulaMapChange={handleFormulaMapChange}layout={layout}onLayoutChange={handleLayoutChange}/>
+              <Stammblatt data={activeData}schema={schema}onChange={setActiveData}onSave={saveKunde}saving={saving}formulaMap={formulaMap}onFormulaMapChange={handleFormulaMapChange}layout={layout}onLayoutChange={handleLayoutChange}labelOverrides={labelOverrides}onLabelOverrideChange={handleLabelOverrideChange}valueLists={valueLists}activeLayoutName={layouts.find(l=>l.id===activeLayoutId)?.name}onSaveLayoutProfile={saveCurrentLayoutProfile}/>
             ):(
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Datensatz auswählen oder + Neu</div>
             )
@@ -1269,6 +1957,9 @@ export default function App(){
         <Modal title="⚙ Formular-Builder"onClose={()=>setModal(null)}wide>
           <FormularBuilder schema={schema}setSchema={setSchema}onClose={()=>setModal(null)}onSave={saveSchemaToDb}/>
         </Modal>
+      )}
+      {modal==="valuelists"&&(
+        <ValueListManager valueLists={valueLists}onChange={handleValueListChange}onClose={()=>setModal(null)}/>
       )}
     </div>
   );
