@@ -43,6 +43,8 @@ const PART_TYPES=[
   {type:"title_footer",label:"Titelfuß",color:"#c8b99a"},
 ];
 
+const PART_TYPE_MAP=Object.fromEntries(PART_TYPES.map(p=>[p.type,p]));
+
 const DEFAULT_LAYOUT=[
   {id:"kopf",label:"Kopfbereich",visible:true,partType:"header"},
   {id:"adresse",label:"Adresse & Kontakt",visible:true,partType:"body"},
@@ -151,6 +153,9 @@ const S={
   cyan:{background:"#00ffff",color:"#000"},
   pink:{background:"#ff99cc",color:"#000"},
   red:{background:"#ff3333",color:"#fff",fontWeight:700},
+  btnPrimary:{background:"#6366f1",color:"#fff",border:"none",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer",fontWeight:700},
+  btnSecondary:{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px 12px",fontSize:12,cursor:"pointer"},
+  btnDanger:{background:"#fee2e2",color:"#b91c1c",border:"none",borderRadius:5,padding:"3px 8px",fontSize:12,cursor:"pointer"},
 };
 
 function evalFormula(formula,positionen,felder){
@@ -454,7 +459,7 @@ function CustomSectionEditor({section,onSave,onClose,valueLists}){
                     <button onClick={()=>toggleCond(i)}title="Bedingung"style={{background:openCond[i]?"#fef9c3":f.condition?.sourceField?"#fef08a":"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:5,padding:"3px 7px",fontSize:12,cursor:"pointer",color:"#b45309",flexShrink:0,position:"relative"}}>
                       ⚡{f.condition?.sourceField&&<span style={{position:"absolute",top:0,right:0,width:6,height:6,borderRadius:"50%",background:"#f59e0b",transform:"translate(50%,-50%)"}}/>}
                     </button>
-                    {!f.locked&&<button onClick={()=>setFields(fields.filter((_,j)=>j!==i))}style={{background:"#fee2e2",border:"none",borderRadius:5,padding:"3px 8px",fontSize:12,cursor:"pointer",color:"#b91c1c",flexShrink:0}}>×</button>}
+                    {!f.locked&&<button onClick={()=>setFields(fields.filter((_,j)=>j!==i))}style={{...S.btnDanger,flexShrink:0}}>×</button>}
                     {f.locked&&<span style={{fontSize:14,flexShrink:0,padding:"0 4px"}}>🔒</span>}
                   </div>
                   {openFmt[i]&&(
@@ -522,8 +527,8 @@ function CustomSectionEditor({section,onSave,onClose,valueLists}){
             })}
           </div>
           <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:18}}>
-            <button onClick={onClose}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 16px",fontSize:13,cursor:"pointer"}}>Abbrechen</button>
-            <button onClick={()=>onSave({...section,label,fields})}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,cursor:"pointer",fontWeight:700}}>✓ Speichern</button>
+            <button onClick={onClose}style={{...S.btnSecondary,borderRadius:8,padding:"8px 16px",fontSize:13}}>Abbrechen</button>
+            <button onClick={()=>onSave({...section,label,fields})}style={{...S.btnPrimary,borderRadius:8,padding:"8px 18px",fontSize:13}}>✓ Speichern</button>
           </div>
         </div>
       </div>
@@ -667,6 +672,14 @@ function PortalEditor({section,onSave,onClose}){
   );
 }
 
+function FieldGrid({fields,renderField}){
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+      {fields.map(f=>(<div key={f.id||f.field_id}>{f.type!=="check"&&<div style={{...S.label,marginBottom:2}}>{f.label}</div>}{renderField(f)}</div>))}
+    </div>
+  );
+}
+
 function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapChange,layout,onLayoutChange,labelOverrides,onLabelOverrideChange,valueLists,activeLayoutName,onSaveLayoutProfile}){
   const[editMode,setEditMode]=useState(false);
   const[editingSection,setEditingSection]=useState(null);
@@ -701,6 +714,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
   const addCustomSection=()=>{const id="custom_"+uid();onLayoutChange([...layout,{id,label:"Neuer Abschnitt",visible:true,fields:[],custom:true}]);};
   const saveSection=(idx,updated)=>{const l=[...layout];l[idx]=updated;onLayoutChange(l);setEditingSection(null);};
 
+  function getVLItems(vls,valueListId){return(vls||[]).find(v=>v.id===valueListId)?.items||[]}
   const renderField=(f)=>{
     const fid=f.field_id||f.id;
     const val=felder[fid]||"";
@@ -743,25 +757,21 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
     if(f.type==="date")return<input type="date"value={val}onChange={e=>setVal(e.target.value)}style={base}disabled={isDisabled}/>;
     const vls=valueLists||[];
     if(f.type==="radio"){
-      const vl=vls.find(v=>v.id===f.valueListId);
-      const items=vl?vl.items:[];
+      const items=getVLItems(vls,f.valueListId);
       return<div style={{...fmtStyle,padding:"2px 4px"}}>{items.map(it=><label key={it}style={{display:"flex",alignItems:"center",gap:4,fontSize:fmt.fontSize||12,cursor:"pointer",marginBottom:1}}><input type="radio"name={fid}value={it}checked={val===it}onChange={()=>setVal(it)}style={{width:13,height:13}}disabled={isDisabled}/>{it}</label>)}</div>;
     }
     if(f.type==="checkbox_list"){
-      const vl=vls.find(v=>v.id===f.valueListId);
-      const items=vl?vl.items:[];
+      const items=getVLItems(vls,f.valueListId);
       const selected=(val||"").split(",").map(s=>s.trim()).filter(Boolean);
       const toggle=(it)=>{if(!isDisabled){const ns=selected.includes(it)?selected.filter(s=>s!==it):[...selected,it];setVal(ns.join(", "));}};
       return<div style={{...fmtStyle,padding:"2px 4px"}}>{items.map(it=><label key={it}style={{display:"flex",alignItems:"center",gap:4,fontSize:fmt.fontSize||12,cursor:"pointer",marginBottom:1}}><input type="checkbox"checked={selected.includes(it)}onChange={()=>toggle(it)}style={{width:13,height:13}}disabled={isDisabled}/>{it}</label>)}</div>;
     }
     if(f.type==="dropdown_vl"){
-      const vl=vls.find(v=>v.id===f.valueListId);
-      const items=vl?vl.items:[];
+      const items=getVLItems(vls,f.valueListId);
       return<select value={val}onChange={e=>setVal(e.target.value)}style={base}disabled={isDisabled}><option value="">–</option>{items.map(it=><option key={it}value={it}>{it}</option>)}</select>;
     }
     if(f.type==="listbox"){
-      const vl=vls.find(v=>v.id===f.valueListId);
-      const items=vl?vl.items:[];
+      const items=getVLItems(vls,f.valueListId);
       return<select multiple size={4}value={(val||"").split(",").map(s=>s.trim()).filter(Boolean)}onChange={e=>setVal(Array.from(e.target.selectedOptions).map(o=>o.value).join(", "))}style={{...base,height:"auto"}}disabled={isDisabled}>{items.map(it=><option key={it}value={it}>{it}</option>)}</select>;
     }
     return<input type="text"value={val}onChange={e=>setVal(e.target.value)}style={base}readOnly={isDisabled}/>;
@@ -820,11 +830,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
       case"custom_felder":return schema.length>0?(
         <div style={{marginBottom:8,background:"#f0f0ff",border:"1px solid #ccccff",padding:"6px 8px",borderRadius:4}}>
           <div style={{fontSize:10,fontWeight:700,color:"#4444aa",marginBottom:6}}>Benutzerdefinierte Felder (Builder)</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-            {[...schema].sort((a,b)=>a.y-b.y||a.x-b.x).map(f=>(
-              <div key={f.field_id||f.id}>{f.type!=="check"&&<div style={{...S.label,marginBottom:2}}>{f.label}</div>}{renderField(f)}</div>
-            ))}
-          </div>
+          <FieldGrid fields={[...schema].sort((a,b)=>a.y-b.y||a.x-b.x)} renderField={renderField}/>
         </div>
       ):null;
       case"rabatt":return(
@@ -918,10 +924,8 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
         return(
           <div style={{marginBottom:6}}>
             {(s.fields||[]).length>0?(
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,background:"#fafafa",border:"1px solid #e2e8f0",borderRadius:4,padding:"6px 8px"}}>
-                {(s.fields||[]).map(f=>(
-                  <div key={f.id||f.field_id}>{f.type!=="check"&&<div style={{...S.label,marginBottom:2}}>{f.label}</div>}{renderField(f)}</div>
-                ))}
+              <div style={{background:"#fafafa",border:"1px solid #e2e8f0",borderRadius:4,padding:"6px 8px"}}>
+                <FieldGrid fields={s.fields||[]} renderField={renderField}/>
               </div>
             ):(
               editMode&&<div style={{textAlign:"center",color:"#94a3b8",fontSize:11,padding:"10px",border:"2px dashed #e2e8f0",borderRadius:4}}>Leer — klicke "✎ Felder" um Felder hinzuzufügen</div>
@@ -985,7 +989,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
                 :<span style={{fontSize:11,color:isLocked?"#94a3b8":"#94a3b8",flex:1}}>{s.label}{isLocked&&" 🔒"}</span>
               }
               {s.group&&<span style={{fontSize:9,padding:"1px 5px",borderRadius:3,background:grpColor+"33",color:grpColor,border:`1px solid ${grpColor}66`,flexShrink:0}}>{s.group}</span>}
-              {(()=>{const pt=PART_TYPES.find(p=>p.type===(s.partType||"body"));return pt?(
+              {(()=>{const pt=PART_TYPE_MAP[s.partType||"body"]||PART_TYPE_MAP.body;return pt?(
                 <span style={{fontSize:9,fontWeight:700,padding:"1px 6px",borderRadius:3,background:pt.color+"44",color:pt.color,border:`1px solid ${pt.color}88`,flexShrink:0,letterSpacing:".03em"}}>{pt.label}</span>
               ):null;})()}
               {!isLocked&&(s.isPortal
@@ -1130,9 +1134,10 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
             <div className="print-preview-content"style={{width:794,background:"#fff",boxShadow:"0 8px 40px rgba(0,0,0,.5)",padding:"28px 32px",fontFamily:"Arial,sans-serif",fontSize:11,color:"#111"}}>
               {(()=>{
                 const partOrder=["title_header","header","subsummary_above","body","subsummary_below","summary","footer","title_footer"];
-                const sorted=[...layout].sort((a,b)=>partOrder.indexOf(a.partType||"body")-partOrder.indexOf(b.partType||"body"));
+                const partOrderMap=Object.fromEntries(partOrder.map((t,i)=>[t,i]));
+                const sorted=[...layout].sort((a,b)=>(partOrderMap[a.partType||"body"]??99)-(partOrderMap[b.partType||"body"]??99));
                 return sorted.filter(s=>s.visible).map((s,i)=>{
-                  const pt=PART_TYPES.find(p=>p.type===(s.partType||"body"));
+                  const pt=PART_TYPE_MAP[s.partType||"body"]||PART_TYPE_MAP.body;
                   const isRepeat=["header","footer","title_header","title_footer"].includes(s.partType);
                   const isSub=["subsummary_above","subsummary_below"].includes(s.partType);
                   const isSummary=s.partType==="summary";
@@ -1145,7 +1150,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
                         <div style={{background:"#f0fff0",border:"1px solid #99cc99",padding:"6px 10px",borderRadius:3}}>
                           <div style={{fontWeight:700,fontSize:11,marginBottom:3}}>Zusammenfassung</div>
                           <div style={{display:"flex",gap:16,fontSize:11}}>
-                            <span>Endsumme netto: <strong>{fmt2((pos.reduce((s,p)=>s+(parseFloat(p.preis)||0),0)/rabattFak)+transPreis+duengerP+zusatzSumme)} €</strong></span>
+                            <span>Endsumme netto: <strong>{fmt2((sumPreis/rabattFak)+transPreis+duengerP+zusatzSumme)} €</strong></span>
                             <span>Gesamt (inkl. 19%): <strong>{fmt2(endsumme)} €</strong></span>
                           </div>
                         </div>
@@ -1662,10 +1667,8 @@ export default function App(){
   const[layouts,setLayouts]=useState([..._layouts]);
   const[activeLayoutId,setActiveLayoutId]=useState("layout_main");
   const[editingLayoutName,setEditingLayoutName]=useState(null);
-  const sbRef=useRef(sb);
-
   const onConnect=useCallback(async()=>{
-    sbRef.current=makeSb();
+    makeSb();
     setConnected(true);setLoading(true);
     try{
       setKunden(_kunden);
