@@ -289,6 +289,69 @@ function calcPreisPro10cm(p, rate) {
   return Math.round((cm / 10) * r * anzahl * 100) / 100;
 }
 
+function parseSizeGroups(s){
+  const result=[];
+  s.split("/").forEach(part=>{
+    part=part.trim();
+    const m=part.match(/^(\d+)\s*[x×]\s*(\d+)$/i);
+    if(m)result.push({anzahl:parseInt(m[1],10),cm:parseInt(m[2],10)});
+    else{
+      const cmOnly=part.match(/^(\d+)$/);
+      if(cmOnly)result.push({anzahl:1,cm:parseInt(cmOnly[1],10)});
+    }
+  });
+  return result;
+}
+
+function parsePflanzenZeile(text){
+  const t=text.trim();
+  if(!t)return[];
+
+  const withParen=t.match(/^(\d+\s+)?(.+?)\s*\(([^)]+)\)\s*$/);
+  if(withParen){
+    const name=withParen[2].trim();
+    const groups=parseSizeGroups(withParen[3]);
+    if(groups.length)return groups.map(g=>({art:name,anzahl:g.anzahl,cm:g.cm}));
+  }
+
+  if(/^(\d+\s*[x×]\s*\d+\s*\/?\s*)+$/i.test(t.replace(/\s/g,""))){
+    return parseSizeGroups(t).map(g=>({art:"",anzahl:g.anzahl,cm:g.cm}));
+  }
+
+  const qtyNameCm=t.match(/^(\d+)\s+(.+?)\s+(\d+)\s*cm?\s*$/i);
+  if(qtyNameCm)return[{art:qtyNameCm[2].trim(),anzahl:parseInt(qtyNameCm[1],10),cm:parseInt(qtyNameCm[3],10)}];
+
+  const nameQtyCm=t.match(/^(.+?)\s+(\d+)\s*[x×]\s*(\d+)\s*cm?\s*$/i);
+  if(nameQtyCm)return[{art:nameQtyCm[1].trim(),anzahl:parseInt(nameQtyCm[2],10),cm:parseInt(nameQtyCm[3],10)}];
+
+  const qtyNameNum=t.match(/^(\d+)\s+(.+?)\s+(\d{2,})$/);
+  if(qtyNameNum)return[{art:qtyNameNum[2].trim(),anzahl:parseInt(qtyNameNum[1],10),cm:parseInt(qtyNameNum[3],10)}];
+
+  const nameCm=t.match(/^(.+?)\s+(\d+)\s*cm?\s*$/i);
+  if(nameCm)return[{art:nameCm[1].trim(),anzahl:1,cm:parseInt(nameCm[2],10)}];
+
+  const nameSize=t.match(/^(.+?)\s+(\d+)\s*[x×]\s*(\d+)$/i);
+  if(nameSize)return[{art:nameSize[1].trim(),anzahl:parseInt(nameSize[2],10),cm:parseInt(nameSize[3],10)}];
+
+  return[{art:t,anzahl:1,cm:""}];
+}
+
+function parsePflanzenEingabe(text){
+  return text.split(/\n/).flatMap(line=>parsePflanzenZeile(line)).filter(r=>r.art||r.cm);
+}
+
+function applyEntriesToPositionen(positionen,entries,recalcPos){
+  const copy=positionen.map(p=>({...p}));
+  let slotIdx=0;
+  for(const entry of entries){
+    while(slotIdx<copy.length&&(copy[slotIdx].art||copy[slotIdx].cm))slotIdx++;
+    if(slotIdx>=copy.length)break;
+    copy[slotIdx]=recalcPos({...copy[slotIdx],art:entry.art||copy[slotIdx].art,anzahl:entry.anzahl??1,cm:entry.cm??"",label:copy[slotIdx].label});
+    slotIdx++;
+  }
+  return copy;
+}
+
 function effectivePreis(p, formulaMap={}, preisPro10cm=null){
   if(formulaMap[p.label]){
     const r=calcPosPreis(p,formulaMap[p.label]);
@@ -305,6 +368,8 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
   const [draftMap, setDraftMap] = useState({});
   const [draftRate, setDraftRate] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [quickEntry,setQuickEntry]=useState("");
+  const [quickMsg,setQuickMsg]=useState("");
 
   const rateActive=preisPro10cm!==""&&preisPro10cm!=null&&parseFloat(preisPro10cm)>0;
   const resolvePreis=(p)=>effectivePreis(p,formulaMap,preisPro10cm);
@@ -342,6 +407,19 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
     onChange(copy);
   };
 
+  const applyQuickEntry=()=>{
+    const entries=parsePflanzenEingabe(quickEntry);
+    if(!entries.length){setQuickMsg("Konnte Eingabe nicht erkennen.");return}
+    let count=0,si=0;
+    for(let i=0;i<entries.length;i++){
+      while(si<positionen.length&&(positionen[si].art||positionen[si].cm))si++;
+      if(si<positionen.length){count++;si++}else break;
+    }
+    onChange(applyEntriesToPositionen(positionen,entries,recalcPos));
+    setQuickMsg(`${count} Zeile${count!==1?"n":""} eingetragen`+(count<entries.length?` (${entries.length-count} ohne freien Platz)`:""));
+    if(count>=entries.length)setQuickEntry("");
+  };
+
   const sumCm=positionen.reduce((s,p)=>s+(parseFloat(p.cm)||0),0);
   const sumPreis=positionen.reduce((s,p)=>s+(parseFloat(resolvePreis(p))||0),0);
   const colFlex=[["Pos",.4],["Pflanzenart / Beschreibung",4],["Anzahl",1],["cm",1],["€-Preis",1]];
@@ -354,6 +432,20 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
           style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:4,padding:"3px 10px",fontSize:10,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap",marginLeft:"auto"}}>
           ⚙ Preis-Einstellungen
         </button>
+      </div>
+      <div style={{marginBottom:6,background:"#f8faf8",border:"1px solid #c8d8c8",borderRadius:6,padding:"6px 8px"}}>
+        <div style={{fontSize:9,fontWeight:700,color:"#374151",marginBottom:4}}>Schnelleingabe</div>
+        <div style={{display:"flex",gap:4}}>
+          <input value={quickEntry} onChange={e=>{setQuickEntry(e.target.value);setQuickMsg("")}}
+            onKeyDown={e=>e.key==="Enter"&&applyQuickEntry()}
+            placeholder="z.B. 4 Oleander (2x130/2x140)"
+            style={{flex:1,...S.cell,fontSize:11,padding:"5px 8px"}}/>
+          <button onClick={applyQuickEntry} style={{background:"#059669",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",fontSize:10,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>Einfügen</button>
+        </div>
+        <div style={{fontSize:9,color:"#64748b",marginTop:4,lineHeight:1.5}}>
+          Formate: <code>4 Oleander (2x130/2x140)</code> · <code>Olivenbaum 180</code> · <code>3 Lavendel 40</code> · mehrere Zeilen möglich
+        </div>
+        {quickMsg&&<div style={{fontSize:9,color:quickMsg.includes("nicht")?"#b91c1c":"#059669",marginTop:3,fontWeight:600}}>{quickMsg}</div>}
       </div>
       <div style={{display:"flex",gap:0,background:"#ddd",border:"1px solid #999",borderBottom:"none",alignItems:"stretch"}}>
         {colFlex.map(([h,f])=>(
