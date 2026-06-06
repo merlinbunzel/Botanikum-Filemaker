@@ -20,7 +20,7 @@ let _touren=[
 ];
 let _schema=[];
 let _posFormulaMap={};
-let _defaultPreisMap={};
+let _preisPro10cm=12;
 let _valueLists=[{id:"vl1",name:"Ja / Nein",items:["Ja","Nein"]},{id:"vl2",name:"Zahlungsart",items:["Bar","Überweisung","EC-Karte","Rechnung"]},{id:"vl3",name:"Status",items:["Offen","In Bearbeitung","Erledigt","Storniert"]}];
 let _relations=[
   {id:"rel1",name:"Positionen",sourceField:"id",targetField:"kunde_id",targetTable:"positionen"},
@@ -280,67 +280,78 @@ function calcPosPreis(p, formel) {
   } catch { return null; }
 }
 
-function effectivePreis(p,formulaMap={},defaultPreisMap={}){
+function calcPreisPro10cm(p, rate) {
+  const r = parseFloat(rate);
+  if (!r || !isFinite(r)) return null;
+  const cm = parseFloat(p.cm) || 0;
+  if (cm <= 0) return null;
+  const anzahl = parseFloat(p.anzahl) || 1;
+  return Math.round((cm / 10) * r * anzahl * 100) / 100;
+}
+
+function effectivePreis(p, formulaMap={}, preisPro10cm=null){
   if(formulaMap[p.label]){
     const r=calcPosPreis(p,formulaMap[p.label]);
     if(r!==null)return r;
   }
+  const auto=calcPreisPro10cm(p,preisPro10cm);
+  if(auto!==null)return auto;
   if(p.preis!==""&&p.preis!=null&&p.preis!==undefined)return parseFloat(p.preis)||0;
-  const def=defaultPreisMap[p.label];
-  return def!==undefined&&def!==""?parseFloat(def)||0:0;
+  return 0;
 }
 
-function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChange, defaultPreisMap={}, onDefaultPreisMapChange}){
+function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChange, preisPro10cm=12, onPreisPro10cmChange}){
   const [showFormulas, setShowFormulas] = useState(false);
   const [draftMap, setDraftMap] = useState({});
-  const [draftDefaultPreis, setDraftDefaultPreis] = useState({});
+  const [draftRate, setDraftRate] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const resolvePreis=(p)=>effectivePreis(p,formulaMap,defaultPreisMap);
+  const rateActive=preisPro10cm!==""&&preisPro10cm!=null&&parseFloat(preisPro10cm)>0;
+  const resolvePreis=(p)=>effectivePreis(p,formulaMap,preisPro10cm);
 
-  const openFormulas = () => { setDraftMap({...formulaMap}); setDraftDefaultPreis({...defaultPreisMap}); setShowFormulas(true); };
-  const saveFormulas = () => {
+  const recalcPos=(p)=>{
+    if(formulaMap[p.label]){
+      const r=calcPosPreis(p,formulaMap[p.label]);
+      return r!==null?{...p,preis:r}:p;
+    }
+    if(rateActive){
+      const r=calcPreisPro10cm(p,preisPro10cm);
+      return r!==null?{...p,preis:r}:p;
+    }
+    return p;
+  };
+
+  const openFormulas=()=>{setDraftMap({...formulaMap});setDraftRate(String(preisPro10cm??""));setShowFormulas(true);};
+  const saveFormulas=()=>{
+    onPreisPro10cmChange&&onPreisPro10cmChange(draftRate===""?null:parseFloat(draftRate));
     onFormulaMapChange(draftMap);
-    onDefaultPreisMapChange&&onDefaultPreisMapChange(draftDefaultPreis);
-    const updated = positionen.map(p => {
-      if(draftMap[p.label]){
-        const r = calcPosPreis(p, draftMap[p.label]);
-        return r !== null ? {...p, preis: r} : p;
-      }
-      const def=draftDefaultPreis[p.label];
-      if(def!==undefined&&def!==""&&(p.preis===""||p.preis==null||p.preis===undefined))return{...p,preis:def};
-      return p;
-    });
-    onChange(updated);
+    const rate=draftRate===""?null:parseFloat(draftRate);
+    onChange(positionen.map(p=>{
+      if(draftMap[p.label]){const r=calcPosPreis(p,draftMap[p.label]);return r!==null?{...p,preis:r}:p;}
+      const r=calcPreisPro10cm(p,rate);
+      return r!==null?{...p,preis:r}:p;
+    }));
     setShowFormulas(false);
   };
 
-  const setPos = (i, k, v) => {
-    const copy = [...positionen];
-    let updated = {...copy[i], [k]: v};
-    if (formulaMap[updated.label]) {
-      if (k === "anzahl" || k === "cm") {
-        const r = calcPosPreis({...updated, [k]: v}, formulaMap[updated.label]);
-        if (r !== null) updated.preis = r;
-      }
-    } else if (k !== "preis") {
-      const def=defaultPreisMap[updated.label];
-      if(def!==undefined&&def!==""&&(updated.preis===""||updated.preis==null||updated.preis===undefined)){
-        updated.preis=def;
-      }
-    }
-    copy[i] = updated;
+  const setPos=(i,k,v)=>{
+    const copy=[...positionen];
+    let updated={...copy[i],[k]:v};
+    updated=recalcPos(updated);
+    copy[i]=updated;
     onChange(copy);
   };
 
-  const sumCm = positionen.reduce((s,p)=>s+(parseFloat(p.cm)||0),0);
-  const sumPreis = positionen.reduce((s,p)=>s+(parseFloat(resolvePreis(p))||0),0);
+  const sumCm=positionen.reduce((s,p)=>s+(parseFloat(p.cm)||0),0);
+  const sumPreis=positionen.reduce((s,p)=>s+(parseFloat(resolvePreis(p))||0),0);
   const colFlex=[["Pos",.4],["Pflanzenart / Beschreibung",4],["Anzahl",1],["cm",1],["€-Preis",1]];
 
   return(
     <div>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4,gap:6}}>
+        {rateActive&&<span style={{fontSize:10,color:"#059669",fontWeight:600}}>{preisPro10cm} € / 10 cm → Preis aus Durchmesser</span>}
         <button onClick={openFormulas}
-          style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:4,padding:"3px 10px",fontSize:10,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>
+          style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:4,padding:"3px 10px",fontSize:10,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap",marginLeft:"auto"}}>
           ⚙ Preis-Einstellungen
         </button>
       </div>
@@ -351,10 +362,9 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
       </div>
 
       {positionen.map((p,i)=>{
-        const hasFormel = !!formulaMap[p.label];
-        const hasDefault = !hasFormel && defaultPreisMap[p.label] !== undefined && defaultPreisMap[p.label] !== "";
-        const preisAuto = hasFormel ? calcPosPreis(p, formulaMap[p.label]) : null;
-        const displayPreis = hasFormel ? preisAuto : (p.preis !== "" && p.preis != null ? p.preis : (hasDefault ? defaultPreisMap[p.label] : ""));
+        const hasFormel=!!formulaMap[p.label];
+        const hasAuto=rateActive&&!hasFormel;
+        const preisVal=resolvePreis(p);
         return(
           <div key={i} style={{display:"flex",gap:0,border:"1px solid #ccc",borderTop:"none",background:i%2===0?"#fff":"#f9f9f0"}}>
             <div style={{flex:.4,padding:"1px 5px",borderRight:"1px solid #ccc",fontSize:11,fontWeight:700,color:"#555",display:"flex",alignItems:"center",minWidth:26}}>{p.label}</div>
@@ -362,21 +372,19 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
               <input value={p.art||""} onChange={e=>setPos(i,"art",e.target.value)} style={{...S.cell,border:"none",background:"transparent"}}/>
             </div>
             <div style={{flex:1,borderRight:"1px solid #ccc"}}>
-              <input type="number" value={p.anzahl||""} onChange={e=>setPos(i,"anzahl",e.target.value)} style={{...S.cell,border:"none",background:"transparent",textAlign:"right"}}/>
+              <input type="number" value={p.anzahl||""} onChange={e=>setPos(i,"anzahl",e.target.value)} placeholder="1" style={{...S.cell,border:"none",background:"transparent",textAlign:"right"}}/>
             </div>
             <div style={{flex:1,borderRight:"1px solid #ccc"}}>
-              <input type="number" value={p.cm||""} onChange={e=>setPos(i,"cm",e.target.value)} style={{...S.cell,border:"none",background:"transparent",textAlign:"right"}}/>
+              <input type="number" value={p.cm||""} onChange={e=>setPos(i,"cm",e.target.value)} style={{...S.cell,border:"none",background:hasAuto?"#f0fdf4":"transparent",textAlign:"right"}}/>
             </div>
             <div style={{flex:1,borderRight:"1px solid #ccc",position:"relative"}}>
-              {hasFormel ? (
-                <div style={{...S.cell,border:"none",background:"#ede9fe",color:"#5b21b6",fontWeight:700,fontFamily:"monospace",textAlign:"right",padding:"2px 5px",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:3}}>
-                  <span style={{fontSize:9,color:"#a78bfa"}}>ƒ</span>
-                  {preisAuto !== null ? fmt2(preisAuto) : "–"}
+              {hasFormel||hasAuto?(
+                <div style={{...S.cell,border:"none",background:hasFormel?"#ede9fe":"#d1fae5",color:hasFormel?"#5b21b6":"#065f46",fontWeight:700,fontFamily:"monospace",textAlign:"right",padding:"2px 5px",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:3}}>
+                  <span style={{fontSize:9,opacity:.7}}>{hasFormel?"ƒ":"⌀"}</span>
+                  {preisVal>0?fmt2(preisVal):"–"}
                 </div>
-              ) : (
-                <input type="number" value={displayPreis} onChange={e=>setPos(i,"preis",e.target.value)}
-                  placeholder={hasDefault?String(defaultPreisMap[p.label]):""}
-                  style={{...S.cell,border:"none",background:hasDefault&&!p.preis?"#f0fdf4":"transparent",textAlign:"right"}}/>
+              ):(
+                <input type="number" value={p.preis||""} onChange={e=>setPos(i,"preis",e.target.value)} style={{...S.cell,border:"none",background:"transparent",textAlign:"right"}}/>
               )}
             </div>
           </div>
@@ -391,51 +399,38 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
         <div style={{flex:1,padding:"3px 6px",textAlign:"right"}}>{fmt2(sumPreis)} €</div>
       </div>
 
-      {showFormulas && (
+      {showFormulas&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1200}}>
-          <div style={{background:"#fff",borderRadius:14,width:600,maxHeight:"85vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
+          <div style={{background:"#fff",borderRadius:14,width:520,maxHeight:"85vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2}}>
-              <span style={{fontWeight:700,fontSize:15,color:"#0f172a"}}>⚙ Preis-Einstellungen pro Position</span>
+              <span style={{fontWeight:700,fontSize:15,color:"#0f172a"}}>⚙ Preis-Einstellungen</span>
               <button onClick={()=>setShowFormulas(false)} style={{background:"#f1f5f9",border:"none",borderRadius:7,width:28,height:28,cursor:"pointer",fontSize:16,color:"#555"}}>×</button>
             </div>
             <div style={{padding:20}}>
-              <div style={{fontSize:12,color:"#64748b",marginBottom:14,background:"#f8fafc",borderRadius:8,padding:"10px 14px",lineHeight:1.7}}>
-                <strong>Formel</strong> (optional): berechnet Preis aus <code>anzahl</code> und <code>cm</code> – z. B. <code>anzahl * 15</code><br/>
-                <strong>Standardpreis €</strong>: wird eingetragen, wenn keine Formel gesetzt ist<br/>
-                <span style={{fontSize:11,color:"#94a3b8"}}>Formel hat Vorrang vor Standardpreis</span>
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:6}}>Preis pro 10 cm (€)</label>
+                <input type="number" value={draftRate} onChange={e=>setDraftRate(e.target.value)} placeholder="z. B. 12"
+                  style={{...S.cell,fontSize:16,fontWeight:700,padding:"10px 12px",background:"#f0fdf4"}}/>
+                <div style={{fontSize:11,color:"#64748b",marginTop:8,lineHeight:1.6,background:"#f8fafc",borderRadius:8,padding:"10px 12px"}}>
+                  <strong>Formel:</strong> (cm ÷ 10) × € pro 10 cm × Anzahl<br/>
+                  <strong>Beispiel:</strong> 180 cm, 12 €/10 cm, Anzahl 1 → <strong style={{color:"#059669"}}>216,00 €</strong><br/>
+                  <strong>Beispiel:</strong> 100 cm, 12 €/10 cm, Anzahl 2 → <strong style={{color:"#059669"}}>240,00 €</strong>
+                </div>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                {LABELS.map(lbl=>(
-                  <div key={lbl} style={{background:"#f8fafc",borderRadius:8,padding:"8px 10px",border:"1px solid #e2e8f0"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
-                      <span style={{fontWeight:700,fontSize:12,color:"#374151",minWidth:28}}>{lbl}</span>
-                      {draftMap[lbl] && <span style={{fontSize:10,background:"#ede9fe",color:"#6366f1",borderRadius:3,padding:"0 5px"}}>ƒ Formel</span>}
-                      {!draftMap[lbl] && draftDefaultPreis[lbl] && <span style={{fontSize:10,background:"#d1fae5",color:"#059669",borderRadius:3,padding:"0 5px"}}>€ Standard</span>}
+              <button onClick={()=>setShowAdvanced(v=>!v)} style={{background:"none",border:"none",color:"#6366f1",fontSize:12,cursor:"pointer",fontWeight:600,padding:0,marginBottom:10}}>
+                {showAdvanced?"▼ Erweitert ausblenden":"▶ Erweitert: eigene Formeln pro Position"}
+              </button>
+              {showAdvanced&&(
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  {LABELS.map(lbl=>(
+                    <div key={lbl} style={{background:"#f8fafc",borderRadius:8,padding:"8px 10px",border:"1px solid #e2e8f0"}}>
+                      <span style={{fontWeight:700,fontSize:12,color:"#374151"}}>{lbl}</span>
+                      <input value={draftMap[lbl]||""} onChange={e=>setDraftMap(m=>({...m,[lbl]:e.target.value}))}
+                        placeholder="Eigene Formel (optional)" style={{...S.cell,fontFamily:"monospace",fontSize:11,marginTop:4}}/>
                     </div>
-                    <input
-                      value={draftMap[lbl]||""}
-                      onChange={e=>setDraftMap(m=>({...m,[lbl]:e.target.value}))}
-                      placeholder="Formel, z. B. anzahl * 15"
-                      style={{...S.cell,fontFamily:"monospace",fontSize:12,marginBottom:4}}
-                    />
-                    <input
-                      type="number"
-                      value={draftDefaultPreis[lbl]||""}
-                      onChange={e=>setDraftDefaultPreis(m=>({...m,[lbl]:e.target.value}))}
-                      placeholder="Standardpreis €"
-                      style={{...S.cell,fontSize:12,background:draftMap[lbl]?"#f1f5f9":"#f0fdf4"}}
-                      disabled={!!draftMap[lbl]}
-                    />
-                    {draftMap[lbl] && (
-                      <div style={{fontSize:10,color:"#94a3b8",marginTop:3}}>
-                        Vorschau (Anz=2, cm=100): <strong style={{color:"#6366f1"}}>
-                          {(()=>{try{return fmt2(new Function("anzahl","cm",`"use strict";return(${draftMap[lbl]})`)(2,100))}catch{return"Fehler"}})()}
-                        </strong> €
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
               <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
                 <button onClick={()=>setShowFormulas(false)} style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:8,padding:"8px 16px",fontSize:13,cursor:"pointer"}}>Abbrechen</button>
                 <button onClick={saveFormulas} style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"8px 18px",fontSize:13,cursor:"pointer",fontWeight:700}}>✓ Übernehmen</button>
@@ -747,7 +742,7 @@ function FieldGrid({fields,renderField}){
   );
 }
 
-function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapChange,defaultPreisMap,onDefaultPreisMapChange,layout,onLayoutChange,labelOverrides,onLabelOverrideChange,valueLists,activeLayoutName,onSaveLayoutProfile}){
+function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapChange,preisPro10cm,onPreisPro10cmChange,layout,onLayoutChange,labelOverrides,onLabelOverrideChange,valueLists,activeLayoutName,onSaveLayoutProfile}){
   const[editMode,setEditMode]=useState(false);
   const[editingSection,setEditingSection]=useState(null);
   const[gridEnabled,setGridEnabled]=useState(false);
@@ -763,7 +758,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
   const felder=data.felder||{};
   const zusatz=data.zusatzposten||[];
   const rabattFak=parseFloat(data.rabatt_xf)||1;
-  const sumPreis=pos.reduce((s,p)=>s+effectivePreis(p,formulaMap,defaultPreisMap),0);
+  const sumPreis=pos.reduce((s,p)=>s+effectivePreis(p,formulaMap,preisPro10cm),0);
   const transPreis=parseFloat(data.trans_preis)||0;
   const duengerP=parseFloat(data.duenger_preis)||0;
   const zusatzSumme=zusatz.filter(z=>z.aktiv).reduce((s,z)=>s+(parseFloat(z.preis)||0),0);
@@ -893,7 +888,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
           <Inp value={data.bemerkungen_aktuell}onChange={v=>set("bemerkungen_aktuell",v)}rows={3}style={{background:"#e8ffe8",border:"1px solid #99cc99"}}/>
         </div>
       );
-      case"positionen":return<div style={{marginBottom:6}}><PositionenEditor positionen={pos}onChange={setPos}formulaMap={formulaMap}onFormulaMapChange={onFormulaMapChange}defaultPreisMap={defaultPreisMap}onDefaultPreisMapChange={onDefaultPreisMapChange}/></div>;
+      case"positionen":return<div style={{marginBottom:6}}><PositionenEditor positionen={pos}onChange={setPos}formulaMap={formulaMap}onFormulaMapChange={onFormulaMapChange}preisPro10cm={preisPro10cm}onPreisPro10cmChange={onPreisPro10cmChange}/></div>;
       case"custom_felder":return schema.length>0?(
         <div style={{marginBottom:8,background:"#f0f0ff",border:"1px solid #ccccff",padding:"6px 8px",borderRadius:4}}>
           <div style={{fontSize:10,fontWeight:700,color:"#4444aa",marginBottom:6}}>Benutzerdefinierte Felder (Builder)</div>
@@ -1726,7 +1721,7 @@ export default function App(){
   const[saving,setSaving]=useState(false);
   const[modal,setModal]=useState(null);
   const[formulaMap,setFormulaMap]=useState({});
-  const[defaultPreisMap,setDefaultPreisMap]=useState({});
+  const[preisPro10cm,setPreisPro10cm]=useState(12);
   const[layout,setLayout]=useState([...DEFAULT_LAYOUT]);
   const[customPages,setCustomPages]=useState([]);
   const[page,setPage]=useState("stammblatt");
@@ -1777,7 +1772,7 @@ export default function App(){
         setKunden(_kunden);
         setSchema(_schema);
         setFormulaMap({..._posFormulaMap});
-        setDefaultPreisMap({..._defaultPreisMap});
+        setPreisPro10cm(_preisPro10cm);
         setLayout([..._layoutConfig]);
         setTouren(_touren);
         setCustomPages([..._customPages]);
@@ -1834,7 +1829,7 @@ export default function App(){
         if(!rest.id)rest.id=uid();
         const idx=_kunden.findIndex(k=>k.id===rest.id);
         if(idx>=0)_kunden[idx]={..._kunden[idx],...rest};else _kunden.push(rest);
-        _positionen[rest.id]=positionen.filter(p=>p.art||p.cm||p.preis||defaultPreisMap[p.label]);
+        _positionen[rest.id]=positionen.filter(p=>p.art||p.cm||effectivePreis(p,formulaMap,preisPro10cm));
         setKunden([..._kunden]);
         setActiveId(rest.id);
         return;
@@ -1854,8 +1849,8 @@ export default function App(){
       await Promise.all([
         (async()=>{
           await c.from(T.positionen).delete().eq("kunde_id",rest.id);
-          const rows=positionen.filter(p=>p.art||p.cm||p.preis||defaultPreisMap[p.label]).map((p,i)=>{
-            const preisVal=effectivePreis(p,formulaMap,defaultPreisMap);
+          const rows=positionen.filter(p=>p.art||p.cm||effectivePreis(p,formulaMap,preisPro10cm)).map((p,i)=>{
+            const preisVal=effectivePreis(p,formulaMap,preisPro10cm);
             return{kunde_id:rest.id,label:p.label,sort_order:i,art:p.art||null,anzahl:p.anzahl||null,cm:p.cm?parseFloat(p.cm):null,preis:preisVal||null};
           });
           if(rows.length){const{error}=await c.from(T.positionen).insert(rows);if(error)throw error}
@@ -1918,9 +1913,9 @@ export default function App(){
     setFormulaMap({...map});
   };
 
-  const handleDefaultPreisMapChange=(map)=>{
-    _defaultPreisMap=map;
-    setDefaultPreisMap({...map});
+  const handlePreisPro10cmChange=(rate)=>{
+    _preisPro10cm=rate;
+    setPreisPro10cm(rate);
   };
 
   const handleLayoutChange=(l)=>{
@@ -2184,7 +2179,7 @@ export default function App(){
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#555",fontSize:14}}>Lade…</div>
           ):page==="stammblatt"?(
             activeData?(
-              <Stammblatt data={activeData}schema={schema}onChange={setActiveData}onSave={saveKunde}saving={saving}formulaMap={formulaMap}onFormulaMapChange={handleFormulaMapChange}defaultPreisMap={defaultPreisMap}onDefaultPreisMapChange={handleDefaultPreisMapChange}layout={layout}onLayoutChange={handleLayoutChange}labelOverrides={labelOverrides}onLabelOverrideChange={handleLabelOverrideChange}valueLists={valueLists}activeLayoutName={layouts.find(l=>l.id===activeLayoutId)?.name}onSaveLayoutProfile={saveCurrentLayoutProfile}/>
+              <Stammblatt data={activeData}schema={schema}onChange={setActiveData}onSave={saveKunde}saving={saving}formulaMap={formulaMap}onFormulaMapChange={handleFormulaMapChange}preisPro10cm={preisPro10cm}onPreisPro10cmChange={handlePreisPro10cmChange}layout={layout}onLayoutChange={handleLayoutChange}labelOverrides={labelOverrides}onLabelOverrideChange={handleLabelOverrideChange}valueLists={valueLists}activeLayoutName={layouts.find(l=>l.id===activeLayoutId)?.name}onSaveLayoutProfile={saveCurrentLayoutProfile}/>
             ):(
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Datensatz auswählen oder + Neu</div>
             )
