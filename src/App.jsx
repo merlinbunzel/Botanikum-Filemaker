@@ -20,6 +20,7 @@ let _touren=[
 ];
 let _schema=[];
 let _posFormulaMap={};
+let _defaultPreisMap={};
 let _valueLists=[{id:"vl1",name:"Ja / Nein",items:["Ja","Nein"]},{id:"vl2",name:"Zahlungsart",items:["Bar","Überweisung","EC-Karte","Rechnung"]},{id:"vl3",name:"Status",items:["Offen","In Bearbeitung","Erledigt","Storniert"]}];
 let _relations=[
   {id:"rel1",name:"Positionen",sourceField:"id",targetField:"kunde_id",targetTable:"positionen"},
@@ -51,7 +52,7 @@ const DEFAULT_LAYOUT=[
   {id:"adresse",label:"Adresse & Kontakt",visible:true,partType:"body"},
   {id:"bemerkungen_aktuell",label:"Bemerkungen aktuell",visible:true,partType:"body"},
   {id:"positionen",label:"Positionen",visible:true,partType:"body"},
-  {id:"portal_positionen",label:"Portal: Positionen",visible:true,partType:"body",isPortal:true,portalConfig:{relationId:"rel1",rows:5,showScrollbar:true,allowNew:true,allowDelete:true,alternateRows:true,fields:[{key:"label",label:"Pos",width:50},{key:"art",label:"Bezeichnung",width:200},{key:"cm",label:"cm",width:60},{key:"anzahl",label:"Anz",width:60},{key:"preis",label:"Preis €",width:80}]}},
+  {id:"portal_positionen",label:"Portal: Positionen",visible:false,partType:"body",isPortal:true,portalConfig:{relationId:"rel1",rows:5,showScrollbar:true,allowNew:true,allowDelete:true,alternateRows:true,fields:[{key:"label",label:"Pos",width:50},{key:"art",label:"Bezeichnung",width:200},{key:"cm",label:"cm",width:60},{key:"anzahl",label:"Anz",width:60},{key:"preis",label:"Preis €",width:80}]}},
   {id:"custom_felder",label:"Benutzerdefinierte Felder (Builder)",visible:true,partType:"body"},
   {id:"rabatt",label:"Rabatt & Gutschein",visible:true,partType:"body"},
   {id:"transport",label:"Transport",visible:true,partType:"body"},
@@ -279,17 +280,35 @@ function calcPosPreis(p, formel) {
   } catch { return null; }
 }
 
-function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChange}){
+function effectivePreis(p,formulaMap={},defaultPreisMap={}){
+  if(formulaMap[p.label]){
+    const r=calcPosPreis(p,formulaMap[p.label]);
+    if(r!==null)return r;
+  }
+  if(p.preis!==""&&p.preis!=null&&p.preis!==undefined)return parseFloat(p.preis)||0;
+  const def=defaultPreisMap[p.label];
+  return def!==undefined&&def!==""?parseFloat(def)||0:0;
+}
+
+function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChange, defaultPreisMap={}, onDefaultPreisMapChange}){
   const [showFormulas, setShowFormulas] = useState(false);
   const [draftMap, setDraftMap] = useState({});
+  const [draftDefaultPreis, setDraftDefaultPreis] = useState({});
 
-  const openFormulas = () => { setDraftMap({...formulaMap}); setShowFormulas(true); };
+  const resolvePreis=(p)=>effectivePreis(p,formulaMap,defaultPreisMap);
+
+  const openFormulas = () => { setDraftMap({...formulaMap}); setDraftDefaultPreis({...defaultPreisMap}); setShowFormulas(true); };
   const saveFormulas = () => {
     onFormulaMapChange(draftMap);
-    // Recalculate all prices with new formulas
+    onDefaultPreisMapChange&&onDefaultPreisMapChange(draftDefaultPreis);
     const updated = positionen.map(p => {
-      const r = calcPosPreis(p, draftMap[p.label]);
-      return r !== null ? {...p, preis: r} : p;
+      if(draftMap[p.label]){
+        const r = calcPosPreis(p, draftMap[p.label]);
+        return r !== null ? {...p, preis: r} : p;
+      }
+      const def=draftDefaultPreis[p.label];
+      if(def!==undefined&&def!==""&&(p.preis===""||p.preis==null||p.preis===undefined))return{...p,preis:def};
+      return p;
     });
     onChange(updated);
     setShowFormulas(false);
@@ -297,37 +316,45 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
 
   const setPos = (i, k, v) => {
     const copy = [...positionen];
-    const updated = {...copy[i], [k]: v};
-    if (k === "anzahl" || k === "cm") {
-      const r = calcPosPreis({...updated, [k]: v}, formulaMap[updated.label]);
-      if (r !== null) updated.preis = r;
+    let updated = {...copy[i], [k]: v};
+    if (formulaMap[updated.label]) {
+      if (k === "anzahl" || k === "cm") {
+        const r = calcPosPreis({...updated, [k]: v}, formulaMap[updated.label]);
+        if (r !== null) updated.preis = r;
+      }
+    } else if (k !== "preis") {
+      const def=defaultPreisMap[updated.label];
+      if(def!==undefined&&def!==""&&(updated.preis===""||updated.preis==null||updated.preis===undefined)){
+        updated.preis=def;
+      }
     }
     copy[i] = updated;
     onChange(copy);
   };
 
   const sumCm = positionen.reduce((s,p)=>s+(parseFloat(p.cm)||0),0);
-  const sumPreis = positionen.reduce((s,p)=>s+(parseFloat(p.preis)||0),0);
+  const sumPreis = positionen.reduce((s,p)=>s+(parseFloat(resolvePreis(p))||0),0);
+  const colFlex=[["Pos",.4],["Pflanzenart / Beschreibung",4],["Anzahl",1],["cm",1],["€-Preis",1]];
 
   return(
     <div>
-      {/* Header */}
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}>
+        <button onClick={openFormulas}
+          style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:4,padding:"3px 10px",fontSize:10,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>
+          ⚙ Preis-Einstellungen
+        </button>
+      </div>
       <div style={{display:"flex",gap:0,background:"#ddd",border:"1px solid #999",borderBottom:"none",alignItems:"stretch"}}>
-        {[["Pos",.4],["Pflanzenart / Beschreibung",4],["Anzahl",1],["cm",1],["€-Preis",1]].map(([h,f])=>(
+        {colFlex.map(([h,f])=>(
           <div key={h} style={{flex:f,padding:"3px 6px",fontWeight:700,fontSize:10,borderRight:"1px solid #999",background:"#e8e8e0"}}>{h}</div>
         ))}
-        <div style={{padding:"1px 5px",background:"#e8e8e0",display:"flex",alignItems:"center"}}>
-          <button onClick={openFormulas}
-            style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:4,padding:"1px 8px",fontSize:10,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>
-            ⚙ Formeln
-          </button>
-        </div>
       </div>
 
-      {/* Rows */}
       {positionen.map((p,i)=>{
         const hasFormel = !!formulaMap[p.label];
+        const hasDefault = !hasFormel && defaultPreisMap[p.label] !== undefined && defaultPreisMap[p.label] !== "";
         const preisAuto = hasFormel ? calcPosPreis(p, formulaMap[p.label]) : null;
+        const displayPreis = hasFormel ? preisAuto : (p.preis !== "" && p.preis != null ? p.preis : (hasDefault ? defaultPreisMap[p.label] : ""));
         return(
           <div key={i} style={{display:"flex",gap:0,border:"1px solid #ccc",borderTop:"none",background:i%2===0?"#fff":"#f9f9f0"}}>
             <div style={{flex:.4,padding:"1px 5px",borderRight:"1px solid #ccc",fontSize:11,fontWeight:700,color:"#555",display:"flex",alignItems:"center",minWidth:26}}>{p.label}</div>
@@ -347,14 +374,15 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
                   {preisAuto !== null ? fmt2(preisAuto) : "–"}
                 </div>
               ) : (
-                <input type="number" value={p.preis||""} onChange={e=>setPos(i,"preis",e.target.value)} style={{...S.cell,border:"none",background:"transparent",textAlign:"right"}}/>
+                <input type="number" value={displayPreis} onChange={e=>setPos(i,"preis",e.target.value)}
+                  placeholder={hasDefault?String(defaultPreisMap[p.label]):""}
+                  style={{...S.cell,border:"none",background:hasDefault&&!p.preis?"#f0fdf4":"transparent",textAlign:"right"}}/>
               )}
             </div>
           </div>
         );
       })}
 
-      {/* Summenzeile */}
       <div style={{display:"flex",border:"1px solid #ccc",borderTop:"none",background:"#e8e8d0",fontWeight:700,fontSize:11}}>
         <div style={{flex:.4,padding:"3px 5px",borderRight:"1px solid #ccc"}}/>
         <div style={{flex:4,padding:"3px 8px",borderRight:"1px solid #ccc"}}>Summe</div>
@@ -363,38 +391,44 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
         <div style={{flex:1,padding:"3px 6px",textAlign:"right"}}>{fmt2(sumPreis)} €</div>
       </div>
 
-      {/* Formel-Editor Modal */}
       {showFormulas && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1200}}>
-          <div style={{background:"#fff",borderRadius:14,width:560,maxHeight:"85vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
+          <div style={{background:"#fff",borderRadius:14,width:600,maxHeight:"85vh",overflow:"auto",boxShadow:"0 24px 80px rgba(0,0,0,.3)"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 20px",borderBottom:"1px solid #f1f5f9",position:"sticky",top:0,background:"#fff",zIndex:2}}>
-              <span style={{fontWeight:700,fontSize:15,color:"#0f172a"}}>⚙ Positions-Formeln bearbeiten</span>
+              <span style={{fontWeight:700,fontSize:15,color:"#0f172a"}}>⚙ Preis-Einstellungen pro Position</span>
               <button onClick={()=>setShowFormulas(false)} style={{background:"#f1f5f9",border:"none",borderRadius:7,width:28,height:28,cursor:"pointer",fontSize:16,color:"#555"}}>×</button>
             </div>
             <div style={{padding:20}}>
               <div style={{fontSize:12,color:"#64748b",marginBottom:14,background:"#f8fafc",borderRadius:8,padding:"10px 14px",lineHeight:1.7}}>
-                <strong>Verfügbare Variablen:</strong> <code style={{background:"#ede9fe",padding:"1px 5px",borderRadius:3}}>anzahl</code> · <code style={{background:"#ede9fe",padding:"1px 5px",borderRadius:3}}>cm</code><br/>
-                <strong>Beispiele:</strong> <code>anzahl * 15</code> · <code>cm * 2.5</code> · <code>anzahl * cm * 0.1</code><br/>
-                <span style={{fontSize:11,color:"#94a3b8"}}>Leer lassen = Preis manuell eingeben</span>
+                <strong>Formel</strong> (optional): berechnet Preis aus <code>anzahl</code> und <code>cm</code> – z. B. <code>anzahl * 15</code><br/>
+                <strong>Standardpreis €</strong>: wird eingetragen, wenn keine Formel gesetzt ist<br/>
+                <span style={{fontSize:11,color:"#94a3b8"}}>Formel hat Vorrang vor Standardpreis</span>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 {LABELS.map(lbl=>(
                   <div key={lbl} style={{background:"#f8fafc",borderRadius:8,padding:"8px 10px",border:"1px solid #e2e8f0"}}>
                     <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                       <span style={{fontWeight:700,fontSize:12,color:"#374151",minWidth:28}}>{lbl}</span>
-                      {draftMap[lbl] && (
-                        <span style={{fontSize:10,background:"#ede9fe",color:"#6366f1",borderRadius:3,padding:"0 5px"}}>ƒ aktiv</span>
-                      )}
+                      {draftMap[lbl] && <span style={{fontSize:10,background:"#ede9fe",color:"#6366f1",borderRadius:3,padding:"0 5px"}}>ƒ Formel</span>}
+                      {!draftMap[lbl] && draftDefaultPreis[lbl] && <span style={{fontSize:10,background:"#d1fae5",color:"#059669",borderRadius:3,padding:"0 5px"}}>€ Standard</span>}
                     </div>
                     <input
                       value={draftMap[lbl]||""}
                       onChange={e=>setDraftMap(m=>({...m,[lbl]:e.target.value}))}
-                      placeholder="z. B. anzahl * 15"
-                      style={{...S.cell,fontFamily:"monospace",fontSize:12}}
+                      placeholder="Formel, z. B. anzahl * 15"
+                      style={{...S.cell,fontFamily:"monospace",fontSize:12,marginBottom:4}}
+                    />
+                    <input
+                      type="number"
+                      value={draftDefaultPreis[lbl]||""}
+                      onChange={e=>setDraftDefaultPreis(m=>({...m,[lbl]:e.target.value}))}
+                      placeholder="Standardpreis €"
+                      style={{...S.cell,fontSize:12,background:draftMap[lbl]?"#f1f5f9":"#f0fdf4"}}
+                      disabled={!!draftMap[lbl]}
                     />
                     {draftMap[lbl] && (
                       <div style={{fontSize:10,color:"#94a3b8",marginTop:3}}>
-                        Vorschau (Anzahl=2, cm=100): <strong style={{color:"#6366f1"}}>
+                        Vorschau (Anz=2, cm=100): <strong style={{color:"#6366f1"}}>
                           {(()=>{try{return fmt2(new Function("anzahl","cm",`"use strict";return(${draftMap[lbl]})`)(2,100))}catch{return"Fehler"}})()}
                         </strong> €
                       </div>
@@ -713,7 +747,7 @@ function FieldGrid({fields,renderField}){
   );
 }
 
-function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapChange,layout,onLayoutChange,labelOverrides,onLabelOverrideChange,valueLists,activeLayoutName,onSaveLayoutProfile}){
+function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapChange,defaultPreisMap,onDefaultPreisMapChange,layout,onLayoutChange,labelOverrides,onLabelOverrideChange,valueLists,activeLayoutName,onSaveLayoutProfile}){
   const[editMode,setEditMode]=useState(false);
   const[editingSection,setEditingSection]=useState(null);
   const[gridEnabled,setGridEnabled]=useState(false);
@@ -729,7 +763,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
   const felder=data.felder||{};
   const zusatz=data.zusatzposten||[];
   const rabattFak=parseFloat(data.rabatt_xf)||1;
-  const sumPreis=pos.reduce((s,p)=>s+(parseFloat(p.preis)||0),0);
+  const sumPreis=pos.reduce((s,p)=>s+effectivePreis(p,formulaMap,defaultPreisMap),0);
   const transPreis=parseFloat(data.trans_preis)||0;
   const duengerP=parseFloat(data.duenger_preis)||0;
   const zusatzSumme=zusatz.filter(z=>z.aktiv).reduce((s,z)=>s+(parseFloat(z.preis)||0),0);
@@ -859,7 +893,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
           <Inp value={data.bemerkungen_aktuell}onChange={v=>set("bemerkungen_aktuell",v)}rows={3}style={{background:"#e8ffe8",border:"1px solid #99cc99"}}/>
         </div>
       );
-      case"positionen":return<div style={{marginBottom:6}}><PositionenEditor positionen={pos}onChange={setPos}formulaMap={formulaMap}onFormulaMapChange={onFormulaMapChange}/></div>;
+      case"positionen":return<div style={{marginBottom:6}}><PositionenEditor positionen={pos}onChange={setPos}formulaMap={formulaMap}onFormulaMapChange={onFormulaMapChange}defaultPreisMap={defaultPreisMap}onDefaultPreisMapChange={onDefaultPreisMapChange}/></div>;
       case"custom_felder":return schema.length>0?(
         <div style={{marginBottom:8,background:"#f0f0ff",border:"1px solid #ccccff",padding:"6px 8px",borderRadius:4}}>
           <div style={{fontSize:10,fontWeight:700,color:"#4444aa",marginBottom:6}}>Benutzerdefinierte Felder (Builder)</div>
@@ -1692,6 +1726,7 @@ export default function App(){
   const[saving,setSaving]=useState(false);
   const[modal,setModal]=useState(null);
   const[formulaMap,setFormulaMap]=useState({});
+  const[defaultPreisMap,setDefaultPreisMap]=useState({});
   const[layout,setLayout]=useState([...DEFAULT_LAYOUT]);
   const[customPages,setCustomPages]=useState([]);
   const[page,setPage]=useState("stammblatt");
@@ -1742,6 +1777,7 @@ export default function App(){
         setKunden(_kunden);
         setSchema(_schema);
         setFormulaMap({..._posFormulaMap});
+        setDefaultPreisMap({..._defaultPreisMap});
         setLayout([..._layoutConfig]);
         setTouren(_touren);
         setCustomPages([..._customPages]);
@@ -1798,7 +1834,7 @@ export default function App(){
         if(!rest.id)rest.id=uid();
         const idx=_kunden.findIndex(k=>k.id===rest.id);
         if(idx>=0)_kunden[idx]={..._kunden[idx],...rest};else _kunden.push(rest);
-        _positionen[rest.id]=positionen.filter(p=>p.art||p.cm||p.preis);
+        _positionen[rest.id]=positionen.filter(p=>p.art||p.cm||p.preis||defaultPreisMap[p.label]);
         setKunden([..._kunden]);
         setActiveId(rest.id);
         return;
@@ -1818,7 +1854,10 @@ export default function App(){
       await Promise.all([
         (async()=>{
           await c.from(T.positionen).delete().eq("kunde_id",rest.id);
-          const rows=positionen.filter(p=>p.art||p.cm||p.preis).map((p,i)=>({kunde_id:rest.id,label:p.label,sort_order:i,art:p.art||null,anzahl:p.anzahl||null,cm:p.cm?parseFloat(p.cm):null,preis:p.preis?parseFloat(p.preis):null}));
+          const rows=positionen.filter(p=>p.art||p.cm||p.preis||defaultPreisMap[p.label]).map((p,i)=>{
+            const preisVal=effectivePreis(p,formulaMap,defaultPreisMap);
+            return{kunde_id:rest.id,label:p.label,sort_order:i,art:p.art||null,anzahl:p.anzahl||null,cm:p.cm?parseFloat(p.cm):null,preis:preisVal||null};
+          });
           if(rows.length){const{error}=await c.from(T.positionen).insert(rows);if(error)throw error}
         })(),
         (async()=>{
@@ -1877,6 +1916,11 @@ export default function App(){
   const handleFormulaMapChange=(map)=>{
     _posFormulaMap=map;
     setFormulaMap({...map});
+  };
+
+  const handleDefaultPreisMapChange=(map)=>{
+    _defaultPreisMap=map;
+    setDefaultPreisMap({...map});
   };
 
   const handleLayoutChange=(l)=>{
@@ -2140,7 +2184,7 @@ export default function App(){
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#555",fontSize:14}}>Lade…</div>
           ):page==="stammblatt"?(
             activeData?(
-              <Stammblatt data={activeData}schema={schema}onChange={setActiveData}onSave={saveKunde}saving={saving}formulaMap={formulaMap}onFormulaMapChange={handleFormulaMapChange}layout={layout}onLayoutChange={handleLayoutChange}labelOverrides={labelOverrides}onLabelOverrideChange={handleLabelOverrideChange}valueLists={valueLists}activeLayoutName={layouts.find(l=>l.id===activeLayoutId)?.name}onSaveLayoutProfile={saveCurrentLayoutProfile}/>
+              <Stammblatt data={activeData}schema={schema}onChange={setActiveData}onSave={saveKunde}saving={saving}formulaMap={formulaMap}onFormulaMapChange={handleFormulaMapChange}defaultPreisMap={defaultPreisMap}onDefaultPreisMapChange={handleDefaultPreisMapChange}layout={layout}onLayoutChange={handleLayoutChange}labelOverrides={labelOverrides}onLabelOverrideChange={handleLabelOverrideChange}valueLists={valueLists}activeLayoutName={layouts.find(l=>l.id===activeLayoutId)?.name}onSaveLayoutProfile={saveCurrentLayoutProfile}/>
             ):(
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Datensatz auswählen oder + Neu</div>
             )
