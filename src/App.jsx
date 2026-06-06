@@ -146,6 +146,28 @@ const YEAR=new Date().getFullYear();
 const TODAY=new Date().toISOString().split("T")[0];
 function fmt2(n){return isNaN(n)||n===null?"0,00":Number(n).toFixed(2).replace(".",",")}
 function uid(){return Math.random().toString(36).slice(2,10)}
+
+function mapGaertnereiKunde(g){
+  const name=[g.vorname,g.nachname].filter(Boolean).join(" ");
+  return{
+    code:String(g.kundennummer||""),
+    vorname:g.vorname||"",
+    firma:g.nachname||name||"",
+    email:g.email||"",
+    ortsteil:g.ortsteil||"",
+    jahr:String(YEAR),
+    rabatt_xf:1,
+  };
+}
+
+function positionenFromGaertnerei(g){
+  const rows=[];
+  for(let i=1;i<=12;i++){
+    const art=g[`pflanze${i}`]||g[`pflanze_${i}`]||"";
+    if(String(art).trim())rows.push({label:`P${i}`,sort_order:i-1,art:String(art).trim(),cm:null,preis:null,anzahl:null});
+  }
+  return rows;
+}
 const S={
   cell:{border:"1px solid #bbb",background:"#fff",padding:"2px 5px",fontSize:12,color:"#111",outline:"none",fontFamily:"inherit",width:"100%",boxSizing:"border-box"},
   label:{fontSize:10,color:"#444",fontWeight:600,whiteSpace:"nowrap",paddingTop:2},
@@ -194,11 +216,12 @@ function Lbl({t,ml}){
   return<span style={{...S.label,marginLeft:ml,minWidth:"max-content",paddingTop:3}}>{display}</span>;
 }
 
-function LoginScreen({onLogin}){
+function LoginScreen({onLogin,externalError}){
   const[email,setEmail]=useState("");
   const[pw,setPw]=useState("");
   const[err,setErr]=useState("");
   const[busy,setBusy]=useState(false);
+  const displayErr=err||externalError;
   const submit=async()=>{
     if(!email||!pw){setErr("Bitte E-Mail und Passwort eingeben.");return}
     setBusy(true);setErr("");
@@ -218,7 +241,7 @@ function LoginScreen({onLogin}){
           style={{width:"100%",padding:"12px 14px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box",marginBottom:12}}/>
         <input type="password"value={pw}onChange={e=>setPw(e.target.value)}placeholder="Passwort"onKeyDown={e=>e.key==="Enter"&&submit()}
           style={{width:"100%",padding:"12px 14px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box",marginBottom:12}}/>
-        {err&&<div style={{background:"#fee2e2",color:"#b91c1c",borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12}}>{err}</div>}
+        {displayErr&&<div style={{background:"#fee2e2",color:"#b91c1c",borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12}}>{displayErr}</div>}
         <button onClick={submit}disabled={busy}style={{width:"100%",background:"#059669",color:"#fff",border:"none",borderRadius:9,padding:"12px",fontSize:15,cursor:"pointer",fontWeight:700}}>
           {busy?"Anmelden…":"Anmelden"}
         </button>
@@ -1663,6 +1686,7 @@ export default function App(){
   const[layouts,setLayouts]=useState([..._layouts]);
   const[activeLayoutId,setActiveLayoutId]=useState("layout_main");
   const[editingLayoutName,setEditingLayoutName]=useState(null);
+  const[importing,setImporting]=useState(false);
 
   const loadKunde=useCallback(async(id,c)=>{
     setLoading(true);
@@ -1718,7 +1742,13 @@ export default function App(){
       setSchema(s.data||[]);
       setTouren((t.data||[]).map(tt=>({...tt,kundenIds:(tt.tour_kunden||[]).map(r=>r.kunde_id)})));
       if(k.data?.length){setActiveId(k.data[0].id);await loadKunde(k.data[0].id,c)}
-    }catch(e){setErr(e.message);setConnected(false)}
+    }catch(e){
+      const msg=e?.message||String(e);
+      setErr(msg.includes("stammblatt")||msg.includes("relation")||msg.includes("schema cache")
+        ? "Datenbank-Tabellen fehlen. Bitte botanikum_supabase_setup.sql in Supabase ausführen."
+        : msg);
+      setConnected(false);
+    }
     finally{setLoading(false)}
   },[loadKunde]);
 
@@ -1921,6 +1951,38 @@ export default function App(){
     setValueLists([...lists]);
   };
 
+  const importFromGaertnerei=async()=>{
+    if(DEMO_MODE){alert("Import nur mit Supabase-Verbindung verfügbar.");return}
+    if(!confirm("Kunden aus der Gärtnerei-App importieren?\n\nBereits vorhandene Kunden (gleiche Kundennummer) werden übersprungen."))return;
+    setImporting(true);setErr(null);
+    try{
+      const c=sbRef.current;
+      const{data:gaertnerei,error:e1}=await c.from(T.gaertnerei_kunden).select("*");
+      if(e1)throw e1;
+      const{data:existing,error:e2}=await c.from(T.kunden).select("code");
+      if(e2)throw e2;
+      const existingCodes=new Set((existing||[]).map(k=>k.code).filter(Boolean));
+      let imported=0,skipped=0;
+      for(const g of gaertnerei||[]){
+        const code=String(g.kundennummer||"");
+        if(!code){skipped++;continue}
+        if(existingCodes.has(code)){skipped++;continue}
+        const{data:inserted,error:e3}=await c.from(T.kunden).insert(mapGaertnereiKunde(g)).select().single();
+        if(e3)throw e3;
+        const pos=positionenFromGaertnerei(g);
+        if(pos.length){
+          const{error:e4}=await c.from(T.positionen).insert(pos.map(p=>({...p,kunde_id:inserted.id})));
+          if(e4)throw e4;
+        }
+        existingCodes.add(code);
+        imported++;
+      }
+      await loadAppData();
+      alert(`Import fertig: ${imported} neu importiert, ${skipped} übersprungen.`);
+    }catch(e){setErr("Import fehlgeschlagen: "+(e?.message||String(e)))}
+    finally{setImporting(false)}
+  };
+
   const saveTour=async(tour)=>{
     if(DEMO_MODE){
       const saved={...tour,id:tour.id||uid()};
@@ -1937,7 +1999,7 @@ export default function App(){
     return data;
   };
 
-  if(!connected)return IS_PRODUCTION?<LoginScreen onLogin={handleLogin}/>:null;
+  if(!connected)return IS_PRODUCTION?<LoginScreen onLogin={handleLogin}externalError={err}/>:null;
 
   return(
     <div style={{display:"flex",height:"100vh",fontFamily:"Arial,sans-serif",background:"#2a2a2a",overflow:"hidden"}}>
@@ -1995,6 +2057,9 @@ export default function App(){
         </div>
         <div style={{padding:"8px",borderTop:"1px solid #333",display:"flex",flexDirection:"column",gap:5}}>
           <button onClick={newKunde}style={{background:"#00cc00",color:"#fff",border:"none",borderRadius:6,padding:"7px",fontSize:12,cursor:"pointer",fontWeight:700}}>+ Neu</button>
+          {!DEMO_MODE&&<button onClick={importFromGaertnerei}disabled={importing}style={{background:"rgba(5,150,105,.25)",color:"#4ade80",border:"1px solid rgba(5,150,105,.4)",borderRadius:6,padding:"5px",fontSize:11,cursor:importing?"wait":"pointer"}}>
+            {importing?"⏳ Import…":"📥 Aus Gärtnerei importieren"}
+          </button>}
           <button onClick={()=>setModal("builder")}style={{background:"rgba(99,102,241,.25)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,.3)",borderRadius:6,padding:"5px",fontSize:11,cursor:"pointer"}}>⚙ Felder-Builder</button>
           <button onClick={()=>setModal("valuelists")}style={{background:"rgba(99,102,241,.15)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,.25)",borderRadius:6,padding:"5px",fontSize:11,cursor:"pointer"}}>📋 Wertelisten</button>
         </div>

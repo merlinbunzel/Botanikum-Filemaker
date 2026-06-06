@@ -11,6 +11,7 @@ export const T = {
   tour_kunden: 'stammblatt_tour_kunden',
   formular_felder: 'stammblatt_formular_felder',
   kunden_felder: 'stammblatt_kunden_felder',
+  gaertnerei_kunden: 'kunden',
 }
 
 export function createSupabaseClient() {

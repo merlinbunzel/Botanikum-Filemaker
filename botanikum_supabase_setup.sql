@@ -138,3 +138,15 @@ create policy "auth read stammblatt_kunden_felder" on stammblatt_kunden_felder f
 create policy "auth insert stammblatt_kunden_felder" on stammblatt_kunden_felder for insert to authenticated with check (true);
 create policy "auth update stammblatt_kunden_felder" on stammblatt_kunden_felder for update to authenticated using (true);
 create policy "auth delete stammblatt_kunden_felder" on stammblatt_kunden_felder for delete to authenticated using (true);
+
+-- ── Gärtnerei-App verknüpfen (Import) ─────────────────────────
+-- Erlaubt der Stammblatt-App, Kunden aus der Gärtnerei-Tabelle zu lesen.
+-- Falls Policies schon existieren, diesen Block überspringen.
+
+alter table kunden enable row level security;
+
+do $$ begin
+  create policy "stammblatt read gaertnerei kunden" on kunden
+    for select to authenticated using (true);
+exception when duplicate_object then null;
+end $$;
