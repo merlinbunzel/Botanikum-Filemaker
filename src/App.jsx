@@ -168,6 +168,21 @@ function positionenFromGaertnerei(g){
   }
   return rows;
 }
+
+const KUNDE_SEARCH_FIELDS=[
+  {id:"all",label:"Alle Felder",keys:["firma","vorname","code","ortsteil","ort","plz","strasse","email"]},
+  {id:"name",label:"Name",keys:["firma","vorname"]},
+  {id:"code",label:"Kundennummer",keys:["code"]},
+  {id:"ortsteil",label:"Ortsteil",keys:["ortsteil"]},
+  {id:"ort",label:"Ort / PLZ",keys:["ort","plz"]},
+];
+
+function kundeMatchesSearch(k,query,fieldId){
+  const q=query.trim().toLowerCase();
+  if(!q)return true;
+  const field=KUNDE_SEARCH_FIELDS.find(f=>f.id===fieldId)||KUNDE_SEARCH_FIELDS[0];
+  return field.keys.some(key=>String(k[key]||"").toLowerCase().includes(q));
+}
 const S={
   cell:{border:"1px solid #bbb",background:"#fff",padding:"2px 5px",fontSize:12,color:"#111",outline:"none",fontFamily:"inherit",width:"100%",boxSizing:"border-box"},
   label:{fontSize:10,color:"#444",fontWeight:600,whiteSpace:"nowrap",paddingTop:2},
@@ -1687,6 +1702,8 @@ export default function App(){
   const[activeLayoutId,setActiveLayoutId]=useState("layout_main");
   const[editingLayoutName,setEditingLayoutName]=useState(null);
   const[importing,setImporting]=useState(false);
+  const[kundenSearch,setKundenSearch]=useState("");
+  const[searchField,setSearchField]=useState("all");
 
   const loadKunde=useCallback(async(id,c)=>{
     setLoading(true);
@@ -2001,6 +2018,8 @@ export default function App(){
 
   if(!connected)return IS_PRODUCTION?<LoginScreen onLogin={handleLogin}externalError={err}/>:null;
 
+  const filteredKunden=kunden.filter(k=>kundeMatchesSearch(k,kundenSearch,searchField));
+
   return(
     <div style={{display:"flex",height:"100vh",fontFamily:"Arial,sans-serif",background:"#2a2a2a",overflow:"hidden"}}>
       <div style={{width:200,background:"#1a1a2e",display:"flex",flexDirection:"column",flexShrink:0}}>
@@ -2045,15 +2064,43 @@ export default function App(){
             </div>
           ))}
         </div>
-        <div style={{padding:"6px 6px",flex:1,overflowY:"auto"}}>
-          <div style={{fontSize:9,fontWeight:700,color:"#4ade80",textTransform:"uppercase",letterSpacing:".08em",padding:"4px 6px"}}>Datensätze ({kunden.length})</div>
-          {kunden.map(k=>(
+        <div style={{padding:"6px 6px",flex:1,overflowY:"auto",display:"flex",flexDirection:"column",minHeight:0}}>
+          <div style={{padding:"4px 6px 6px",flexShrink:0}}>
+            <input
+              value={kundenSearch}
+              onChange={e=>setKundenSearch(e.target.value)}
+              placeholder="Suchen…"
+              style={{width:"100%",padding:"6px 8px",border:"1px solid #444",borderRadius:5,background:"#12121f",color:"#e2e8f0",fontSize:11,outline:"none",boxSizing:"border-box",marginBottom:4}}
+            />
+            <select
+              value={searchField}
+              onChange={e=>setSearchField(e.target.value)}
+              style={{width:"100%",padding:"4px 6px",border:"1px solid #444",borderRadius:5,background:"#12121f",color:"#94a3b8",fontSize:10,outline:"none",cursor:"pointer"}}
+            >
+              {KUNDE_SEARCH_FIELDS.map(f=><option key={f.id}value={f.id}>{f.label}</option>)}
+            </select>
+          </div>
+          <div style={{fontSize:9,fontWeight:700,color:"#4ade80",textTransform:"uppercase",letterSpacing:".08em",padding:"2px 6px 4px",flexShrink:0}}>
+            Datensätze ({filteredKunden.length}{kundenSearch.trim()?` / ${kunden.length}`:""})
+          </div>
+          <div style={{flex:1,overflowY:"auto"}}>
+          {filteredKunden.length===0?(
+            <div style={{padding:"12px 8px",fontSize:10,color:"#666",textAlign:"center"}}>
+              {kundenSearch.trim()?"Keine Treffer":"Keine Datensätze"}
+            </div>
+          ):filteredKunden.map(k=>(
             <div key={k.id}onClick={()=>loadKunde(k.id)}
               style={{padding:"6px 8px",cursor:"pointer",borderRadius:6,background:activeId===k.id?"rgba(0,204,0,.2)":"transparent",borderLeft:activeId===k.id?"3px solid #00cc00":"3px solid transparent",marginBottom:1}}>
-              <div style={{fontSize:11,fontWeight:600,color:activeId===k.id?"#4ade80":"#bbb",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{k.firma||k.vorname||"–"}</div>
-              <div style={{fontSize:9,color:"#555"}}>{k.plz} {k.ort}</div>
+              <div style={{fontSize:11,fontWeight:600,color:activeId===k.id?"#4ade80":"#bbb",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                {k.firma||k.vorname||"–"}
+                {k.code&&<span style={{fontSize:9,color:"#666",marginLeft:4}}>#{k.code}</span>}
+              </div>
+              <div style={{fontSize:9,color:"#555"}}>
+                {[k.ortsteil,k.plz,k.ort].filter(Boolean).join(" · ")||"–"}
+              </div>
             </div>
           ))}
+          </div>
         </div>
         <div style={{padding:"8px",borderTop:"1px solid #333",display:"flex",flexDirection:"column",gap:5}}>
           <button onClick={newKunde}style={{background:"#00cc00",color:"#fff",border:"none",borderRadius:6,padding:"7px",fontSize:12,cursor:"pointer",fontWeight:700}}>+ Neu</button>
@@ -2114,13 +2161,14 @@ export default function App(){
           <div style={{display:"flex",gap:2}}>
             {["◀◀","◀","▶","▶▶"].map((b,i)=>(
               <button key={i}onClick={()=>{
-                const idx=kunden.findIndex(k=>k.id===activeId);
-                const next=i<2?Math.max(0,idx+(i===0?-kunden.length:-1)):Math.min(kunden.length-1,idx+(i===3?kunden.length:1));
-                if(kunden[next])loadKunde(kunden[next].id);
+                const list=filteredKunden.length?filteredKunden:kunden;
+                const idx=list.findIndex(k=>k.id===activeId);
+                const next=i<2?Math.max(0,idx+(i===0?-list.length:-1)):Math.min(list.length-1,idx+(i===3?list.length:1));
+                if(list[next])loadKunde(list[next].id);
               }}style={{background:"#ddd",border:"1px solid #888",padding:"1px 7px",cursor:"pointer",fontSize:11}}>{b}</button>
             ))}
           </div>
-          <span>Datensatz {kunden.findIndex(k=>k.id===activeId)+1} von {kunden.length}</span>
+          <span>Datensatz {(filteredKunden.findIndex(k=>k.id===activeId)+1)||0} von {kundenSearch.trim()?filteredKunden.length:kunden.length}</span>
           {activeData&&<button onClick={()=>deleteKunde(activeId)}style={{marginLeft:"auto",background:"#cc0000",color:"#fff",border:"none",borderRadius:4,padding:"2px 10px",fontSize:10,cursor:"pointer"}}>Löschen</button>}
         </div>
       </div>
