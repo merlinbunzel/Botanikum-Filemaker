@@ -1,6 +1,7 @@
 import React,{useState,useEffect,useRef,useCallback,createContext,useContext}from"react";
+import {createSupabaseClient,IS_PRODUCTION,T}from"./supabaseClient.js";
 
-const DEMO_MODE=true;
+const DEMO_MODE=!IS_PRODUCTION;
 
 // ── DUMMY IN-MEMORY STORE ──────────────────────────────────────
 let _kunden=[
@@ -193,42 +194,36 @@ function Lbl({t,ml}){
   return<span style={{...S.label,marginLeft:ml,minWidth:"max-content",paddingTop:3}}>{display}</span>;
 }
 
-function SetupScreen({onConnect}){
-  const[url,setUrl]=useState("");
-  const[key,setKey]=useState("");
+function LoginScreen({onLogin}){
+  const[email,setEmail]=useState("");
+  const[pw,setPw]=useState("");
   const[err,setErr]=useState("");
   const[busy,setBusy]=useState(false);
-  const connect=async()=>{
-    if(DEMO_MODE){onConnect("demo","demo");return}
-    if(!url||!key){setErr("Bitte beide Felder ausfüllen.");return}
+  const submit=async()=>{
+    if(!email||!pw){setErr("Bitte E-Mail und Passwort eingeben.");return}
     setBusy(true);setErr("");
-    try{onConnect(url.trim(),key.trim())}
-    catch(e){setErr("Verbindung fehlgeschlagen: "+(e?.message||String(e)))}
+    try{await onLogin(email.trim(),pw)}
+    catch(e){setErr(e?.message||"Anmeldung fehlgeschlagen");setPw("")}
     finally{setBusy(false)}
   };
   return(
     <div style={{minHeight:"100vh",background:"#052e16",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Arial,sans-serif"}}>
-      <div style={{background:"#fff",borderRadius:16,padding:36,width:480,boxShadow:"0 24px 80px rgba(0,0,0,.5)"}}>
+      <div style={{background:"#fff",borderRadius:16,padding:36,width:400,boxShadow:"0 24px 80px rgba(0,0,0,.5)"}}>
         <div style={{textAlign:"center",marginBottom:24}}>
           <div style={{fontSize:36,marginBottom:8}}>🌿</div>
           <div style={{fontWeight:800,fontSize:22,color:"#052e16"}}>Botanikum Stammblatt</div>
-          <div style={{fontSize:13,color:"#64748b",marginTop:4}}>Supabase Verbindung einrichten</div>
+          <div style={{fontSize:13,color:"#64748b",marginTop:4}}>Bitte anmelden</div>
         </div>
-        <div style={{marginBottom:14}}>
-          <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:4}}>Supabase Project URL</label>
-          <input value={url}onChange={e=>setUrl(e.target.value)}placeholder="https://xxxx.supabase.co"style={{width:"100%",padding:"10px 12px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box"}}/>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:4}}>Anon/Public Key</label>
-          <input value={key}onChange={e=>setKey(e.target.value)}placeholder="eyJhbG..."style={{width:"100%",padding:"10px 12px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box",fontFamily:"monospace"}}/>
-        </div>
+        <input type="email"value={email}onChange={e=>setEmail(e.target.value)}placeholder="E-Mail"onKeyDown={e=>e.key==="Enter"&&submit()}
+          style={{width:"100%",padding:"12px 14px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box",marginBottom:12}}/>
+        <input type="password"value={pw}onChange={e=>setPw(e.target.value)}placeholder="Passwort"onKeyDown={e=>e.key==="Enter"&&submit()}
+          style={{width:"100%",padding:"12px 14px",border:"1px solid #d1d5db",borderRadius:9,fontSize:14,boxSizing:"border-box",marginBottom:12}}/>
         {err&&<div style={{background:"#fee2e2",color:"#b91c1c",borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12}}>{err}</div>}
-        <button onClick={connect}disabled={busy}style={{width:"100%",background:"#059669",color:"#fff",border:"none",borderRadius:9,padding:"12px",fontSize:15,cursor:"pointer",fontWeight:700}}>
-          {busy?"Verbinde…":"Verbinden & starten"}
+        <button onClick={submit}disabled={busy}style={{width:"100%",background:"#059669",color:"#fff",border:"none",borderRadius:9,padding:"12px",fontSize:15,cursor:"pointer",fontWeight:700}}>
+          {busy?"Anmelden…":"Anmelden"}
         </button>
         <div style={{marginTop:16,background:"#f0fdf4",borderRadius:9,padding:"12px 14px",fontSize:12,color:"#374151"}}>
-          <strong>SQL-Setup noch nicht ausgeführt?</strong><br/>
-          Lade zuerst <code style={{background:"#d1fae5",padding:"1px 5px",borderRadius:3}}>botanikum_supabase_setup.sql</code> in den Supabase SQL-Editor hoch.
+          Gleicher Login wie die Gärtnerei-App. SQL-Setup: <code style={{background:"#d1fae5",padding:"1px 5px",borderRadius:3}}>botanikum_supabase_setup.sql</code>
         </div>
       </div>
     </div>
@@ -1648,6 +1643,7 @@ function CanvasPage({page,kundeData,onUpdate,onKundeChange}){
 }
 
 export default function App(){
+  const sbRef=useRef(null);
   const[connected,setConnected]=useState(false);
   const[kunden,setKunden]=useState([]);
   const[touren,setTouren]=useState([]);
@@ -1667,70 +1663,167 @@ export default function App(){
   const[layouts,setLayouts]=useState([..._layouts]);
   const[activeLayoutId,setActiveLayoutId]=useState("layout_main");
   const[editingLayoutName,setEditingLayoutName]=useState(null);
-  const onConnect=useCallback(async()=>{
-    makeSb();
-    setConnected(true);setLoading(true);
+
+  const loadKunde=useCallback(async(id,c)=>{
+    setLoading(true);
     try{
-      setKunden(_kunden);
-      setSchema(_schema);
-      setFormulaMap({..._posFormulaMap});
-      setLayout([..._layoutConfig]);
-      setTouren(_touren);
-      setCustomPages([..._customPages]);
-      if(_kunden.length){setActiveId(_kunden[0].id);loadKunde(_kunden[0].id);}
+      if(DEMO_MODE){
+        const pos=_positionen[id]||[];
+        const filled=LABELS.map(l=>pos.find(pp=>pp.label===l)||{label:l,art:"",cm:"",preis:"",anzahl:""});
+        const base=_kunden.find(k=>k.id===id)||{};
+        setActiveData({...base,positionen:filled,felder:{}});
+        setActiveId(id);
+        return;
+      }
+      const client=c||sbRef.current;
+      const[kRes,p,f]=await Promise.all([
+        client.from(T.kunden).select("*").eq("id",id).single(),
+        client.from(T.positionen).select("*").eq("kunde_id",id).order("sort_order"),
+        client.from(T.kunden_felder).select("*").eq("kunde_id",id),
+      ]);
+      if(kRes.error)throw kRes.error;
+      if(p.error)throw p.error;
+      const felder={};
+      (f.data||[]).forEach(r=>{felder[r.feld_id]=r.wert});
+      const pos=p.data||[];
+      const filled=LABELS.map(l=>pos.find(pp=>pp.label===l)||{label:l,art:"",cm:"",preis:"",anzahl:""});
+      setActiveData({...kRes.data,positionen:filled,felder});
+      setActiveId(id);
     }catch(e){setErr(e.message)}
     finally{setLoading(false)}
   },[]);
 
-  useEffect(()=>{if(DEMO_MODE)onConnect();},[]);
-
-  const loadKunde=async(id)=>{
-    setLoading(true);
+  const loadAppData=useCallback(async()=>{
+    setConnected(true);setLoading(true);
     try{
-      const pos=_positionen[id]||[];
-      const filled=LABELS.map(l=>pos.find(pp=>pp.label===l)||{label:l,art:"",cm:"",preis:"",anzahl:""});
-      const base=_kunden.find(k=>k.id===id)||{};
-      setActiveData({...base,positionen:filled,felder:{}});
-      setActiveId(id);
-    }catch(e){setErr(e.message)}
+      if(DEMO_MODE){
+        makeSb();
+        setKunden(_kunden);
+        setSchema(_schema);
+        setFormulaMap({..._posFormulaMap});
+        setLayout([..._layoutConfig]);
+        setTouren(_touren);
+        setCustomPages([..._customPages]);
+        if(_kunden.length){setActiveId(_kunden[0].id);await loadKunde(_kunden[0].id);}
+        return;
+      }
+      const c=sbRef.current;
+      const[k,s,t]=await Promise.all([
+        c.from(T.kunden).select("*").order("created_at"),
+        c.from(T.formular_felder).select("*").order("sort_order"),
+        c.from(T.touren).select("*, tour_kunden(kunde_id)").order("datum"),
+      ]);
+      if(k.error)throw k.error;
+      setKunden(k.data||[]);
+      setSchema(s.data||[]);
+      setTouren((t.data||[]).map(tt=>({...tt,kundenIds:(tt.tour_kunden||[]).map(r=>r.kunde_id)})));
+      if(k.data?.length){setActiveId(k.data[0].id);await loadKunde(k.data[0].id,c)}
+    }catch(e){setErr(e.message);setConnected(false)}
     finally{setLoading(false)}
+  },[loadKunde]);
+
+  const handleLogin=useCallback(async(email,password)=>{
+    const{error}=await sbRef.current.auth.signInWithPassword({email,password});
+    if(error)throw error;
+    await loadAppData();
+  },[loadAppData]);
+
+  const handleLogout=async()=>{
+    if(!DEMO_MODE&&sbRef.current)await sbRef.current.auth.signOut();
+    location.reload();
   };
+
+  useEffect(()=>{
+    if(IS_PRODUCTION){
+      sbRef.current=createSupabaseClient();
+      sbRef.current.auth.getSession().then(({data:{session}})=>{if(session)loadAppData()});
+    }else if(DEMO_MODE){
+      loadAppData();
+    }
+  },[loadAppData]);
 
   const saveKunde=async()=>{
     if(!activeData)return;
     setSaving(true);setErr(null);
     try{
       const{positionen,felder,...rest}=activeData;
-      if(!rest.id)rest.id=uid();
-      const idx=_kunden.findIndex(k=>k.id===rest.id);
-      if(idx>=0)_kunden[idx]={..._kunden[idx],...rest};else _kunden.push(rest);
-      _positionen[rest.id]=positionen.filter(p=>p.art||p.cm||p.preis);
-      setKunden([..._kunden]);
-      setActiveId(rest.id);
+      if(DEMO_MODE){
+        if(!rest.id)rest.id=uid();
+        const idx=_kunden.findIndex(k=>k.id===rest.id);
+        if(idx>=0)_kunden[idx]={..._kunden[idx],...rest};else _kunden.push(rest);
+        _positionen[rest.id]=positionen.filter(p=>p.art||p.cm||p.preis);
+        setKunden([..._kunden]);
+        setActiveId(rest.id);
+        return;
+      }
+      const c=sbRef.current;
+      const id=rest.id;
+      if(id){
+        const{error}=await c.from(T.kunden).update(rest).eq("id",id);
+        if(error)throw error;
+      }else{
+        const{data,error}=await c.from(T.kunden).insert(rest).select().single();
+        if(error)throw error;
+        rest.id=data.id;
+        setKunden(prev=>[...prev,data]);
+        setActiveId(data.id);
+      }
+      await Promise.all([
+        (async()=>{
+          await c.from(T.positionen).delete().eq("kunde_id",rest.id);
+          const rows=positionen.filter(p=>p.art||p.cm||p.preis).map((p,i)=>({kunde_id:rest.id,label:p.label,sort_order:i,art:p.art||null,anzahl:p.anzahl||null,cm:p.cm?parseFloat(p.cm):null,preis:p.preis?parseFloat(p.preis):null}));
+          if(rows.length){const{error}=await c.from(T.positionen).insert(rows);if(error)throw error}
+        })(),
+        (async()=>{
+          const rows=Object.entries(felder||{}).filter(([,v])=>v!==undefined&&v!=="").map(([feld_id,wert])=>({kunde_id:rest.id,feld_id,wert:String(wert)}));
+          if(rows.length){const{error}=await c.from(T.kunden_felder).upsert(rows,{onConflict:"kunde_id,feld_id"});if(error)throw error}
+        })(),
+      ]);
+      setKunden(prev=>prev.map(k=>k.id===rest.id?{...k,...rest}:k));
     }catch(e){setErr("Fehler: "+e.message)}
     finally{setSaving(false)}
   };
 
   const newKunde=async()=>{
-    const neu={id:uid(),jahr:String(YEAR),firma:"",vorname:"Neuer Kunde",plz:"",ort:"",strasse:"",telefon:"",email:"",code:"",rabatt_xf:1};
-    _kunden.push(neu);
-    _positionen[neu.id]=[];
+    const neu={jahr:String(YEAR),firma:"",vorname:"Neuer Kunde",plz:"",ort:"",strasse:"",telefon:"",email:"",code:"",rabatt_xf:1};
+    if(DEMO_MODE){
+      neu.id=uid();
+      _kunden.push(neu);
+      _positionen[neu.id]=[];
+      const positionen=LABELS.map(l=>({label:l,art:"",cm:"",preis:"",anzahl:""}));
+      setKunden([..._kunden]);
+      setActiveData({...neu,positionen,felder:{}});
+      setActiveId(neu.id);
+      return;
+    }
+    const{data,error}=await sbRef.current.from(T.kunden).insert(neu).select().single();
+    if(error){setErr(error.message);return}
     const positionen=LABELS.map(l=>({label:l,art:"",cm:"",preis:"",anzahl:""}));
-    setKunden([..._kunden]);
-    setActiveData({...neu,positionen,felder:{}});
-    setActiveId(neu.id);
+    setKunden(prev=>[...prev,data]);
+    setActiveData({...data,positionen,felder:{}});
+    setActiveId(data.id);
   };
 
   const deleteKunde=async(id)=>{
     if(!confirm("Datensatz wirklich löschen?"))return;
-    _kunden=_kunden.filter(k=>k.id!==id);
-    delete _positionen[id];
-    setKunden([..._kunden]);
+    if(DEMO_MODE){
+      _kunden=_kunden.filter(k=>k.id!==id);
+      delete _positionen[id];
+      setKunden([..._kunden]);
+      if(activeId===id){setActiveData(null);setActiveId(null)}
+      return;
+    }
+    const{error}=await sbRef.current.from(T.kunden).delete().eq("id",id);
+    if(error){setErr(error.message);return}
+    setKunden(prev=>prev.filter(k=>k.id!==id));
     if(activeId===id){setActiveData(null);setActiveId(null)}
   };
 
   const saveSchemaToDb=async(fields)=>{
-    _schema=fields;
+    if(DEMO_MODE){_schema=fields;setSchema(fields);return}
+    const c=sbRef.current;
+    await c.from(T.formular_felder).delete().neq("sort_order",-1);
+    if(fields.length){const{error}=await c.from(T.formular_felder).insert(fields.map((f,i)=>({...f,sort_order:i})));if(error)throw error}
     setSchema(fields);
   };
 
@@ -1829,20 +1922,30 @@ export default function App(){
   };
 
   const saveTour=async(tour)=>{
-    const saved={...tour,id:tour.id||uid()};
-    const idx=_touren.findIndex(t=>t.id===saved.id);
-    if(idx>=0)_touren[idx]=saved;else _touren.push(saved);
-    return saved;
+    if(DEMO_MODE){
+      const saved={...tour,id:tour.id||uid()};
+      const idx=_touren.findIndex(t=>t.id===saved.id);
+      if(idx>=0)_touren[idx]=saved;else _touren.push(saved);
+      return saved;
+    }
+    const c=sbRef.current;
+    const{kundenIds,tour_kunden,...t}=tour;
+    const{data,error}=await c.from(T.touren).upsert(t,{onConflict:"id"}).select().single();
+    if(error)throw error;
+    await c.from(T.tour_kunden).delete().eq("tour_id",data.id);
+    if(kundenIds?.length){const rows=kundenIds.map((kid,i)=>({tour_id:data.id,kunde_id:kid,sort_order:i}));await c.from(T.tour_kunden).insert(rows)}
+    return data;
   };
 
-  if(!connected)return<SetupScreen onConnect={onConnect}/>;
+  if(!connected)return IS_PRODUCTION?<LoginScreen onLogin={handleLogin}/>:null;
 
   return(
     <div style={{display:"flex",height:"100vh",fontFamily:"Arial,sans-serif",background:"#2a2a2a",overflow:"hidden"}}>
       <div style={{width:200,background:"#1a1a2e",display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{padding:"12px 12px 8px",borderBottom:"1px solid #333"}}>
           <div style={{fontWeight:800,fontSize:14,color:"#00cc00",letterSpacing:"-.01em"}}>🌿 Botanikum</div>
-          <div style={{fontSize:10,color:"#fbbf24",marginTop:1}}>● Demo-Modus (kein Supabase)</div>
+          <div style={{fontSize:10,color:DEMO_MODE?"#fbbf24":"#4ade80",marginTop:1}}>{DEMO_MODE?"● Demo-Modus (lokal)":"● Supabase verbunden"}</div>
+          {!DEMO_MODE&&<button onClick={handleLogout}style={{marginTop:6,background:"rgba(255,255,255,.1)",border:"none",color:"#888",borderRadius:4,padding:"3px 8px",fontSize:10,cursor:"pointer",width:"100%"}}>Abmelden</button>}
         </div>
         <div style={{padding:"6px 8px",borderBottom:"1px solid #333",display:"flex",flexDirection:"column",gap:2}}>
           {[["stammblatt","📋","Stammblätter"],["touren","🚐","Touren"]].map(([id,ic,l])=>(
