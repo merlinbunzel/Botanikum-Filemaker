@@ -255,6 +255,27 @@ function RechnungPrintView({data,formulaMap,preisPro10cm,onClose}){
     </div>
   );
 }
+function isUuid(v){
+  return typeof v==="string"&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
+
+async function loadTourenFromDb(c){
+  const[toursRes,linksRes]=await Promise.all([
+    c.from(T.touren).select("*").order("datum"),
+    c.from(T.tour_kunden).select("tour_id,kunde_id,sort_order").order("sort_order"),
+  ]);
+  if(toursRes.error)throw toursRes.error;
+  if(linksRes.error)throw linksRes.error;
+  const linksByTour={};
+  for(const l of linksRes.data||[]){
+    if(!linksByTour[l.tour_id])linksByTour[l.tour_id]=[];
+    linksByTour[l.tour_id].push(l);
+  }
+  return(toursRes.data||[]).map(tt=>({
+    ...tt,
+    kundenIds:(linksByTour[tt.id]||[]).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)).map(x=>x.kunde_id),
+  }));
+}
 function uid(){return Math.random().toString(36).slice(2,10)}
 
 function syncCodeKdr(k){
@@ -1649,25 +1670,81 @@ function Modal({title,onClose,wide,children}){
   );
 }
 
-function Tourenplanung({kunden,touren,setTouren,onSaveTour,getPflanzenCounts}){
+function Tourenplanung({kunden,touren,setTouren,onSaveTour,onDeleteTour,onError,getPflanzenCounts}){
   const[drag,setDrag]=useState(null);
   const[exporting,setExporting]=useState(null);
+  const[savingTour,setSavingTour]=useState(null);
   const unassigned=kunden.filter(k=>!touren.some(t=>t.kundenIds?.includes(k.id)));
-  const assign=(kid,tid)=>{
-    setTouren(prev=>prev.map(t=>{
+
+  const persistTour=async(tour)=>{
+    setSavingTour(tour.id);
+    onError?.(null);
+    try{
+      await onSaveTour(tour);
+    }catch(e){
+      const msg=e?.message||String(e);
+      onError?.("Tour speichern: "+msg);
+      alert("Tour konnte nicht gespeichert werden:\n"+msg);
+      throw e;
+    }finally{
+      setSavingTour(null);
+    }
+  };
+
+  const assign=async(kid,tid)=>{
+    const next=touren.map(t=>{
       const without={...t,kundenIds:(t.kundenIds||[]).filter(id=>id!==kid)};
       if(t.id===tid)return{...without,kundenIds:[...(without.kundenIds||[]),kid]};
       return without;
-    }));
+    });
+    setTouren(next);
+    const tour=next.find(t=>t.id===tid);
+    if(tour)await persistTour(tour);
   };
-  const remove=(kid,tid)=>setTouren(prev=>prev.map(t=>t.id===tid?{...t,kundenIds:(t.kundenIds||[]).filter(id=>id!==kid)}:t));
+
+  const remove=async(kid,tid)=>{
+    const next=touren.map(t=>t.id===tid?{...t,kundenIds:(t.kundenIds||[]).filter(id=>id!==kid)}:t);
+    setTouren(next);
+    const tour=next.find(t=>t.id===tid);
+    if(tour)await persistTour(tour);
+  };
+
+  const unassignAll=async(kid)=>{
+    const next=touren.map(t=>({...t,kundenIds:(t.kundenIds||[]).filter(id=>id!==kid)}));
+    setTouren(next);
+    for(const t of next){
+      if(touren.some(tt=>tt.id===t.id&&(tt.kundenIds||[]).includes(kid))){
+        await persistTour(t);
+      }
+    }
+  };
+
   const addTour=async()=>{
     const cols=["#10b981","#6366f1","#f59e0b","#ec4899","#0891b2"];
     const neu={name:`Tour ${String.fromCharCode(65+touren.length)}`,fahrer:"",datum:TODAY,farbe:cols[touren.length%cols.length],kundenIds:[]};
-    try{const saved=await onSaveTour(neu);setTouren(prev=>[...prev,{...neu,...saved}])}
-    catch(e){console.error(e)}
+    try{await onSaveTour(neu)}
+    catch(e){alert("Tour konnte nicht erstellt werden: "+(e?.message||String(e)))}
   };
+
   const upd=(id,k,v)=>setTouren(prev=>prev.map(t=>t.id===id?{...t,[k]:v}:t));
+
+  const saveField=async(t,field,value)=>{
+    const updated={...t,[field]:value};
+    setTouren(prev=>prev.map(tt=>tt.id===t.id?updated:tt));
+    await persistTour(updated);
+  };
+
+  const deleteTour=async(t)=>{
+    if(!confirm(`Tour „${t.name}“ wirklich löschen?`))return;
+    setSavingTour(t.id);
+    try{
+      await onDeleteTour(t.id);
+    }catch(e){
+      alert("Löschen fehlgeschlagen: "+(e?.message||String(e)));
+    }finally{
+      setSavingTour(null);
+    }
+  };
 
   const exportTour=async(t)=>{
     setExporting(t.id);
@@ -1714,7 +1791,7 @@ function Tourenplanung({kunden,touren,setTouren,onSaveTour,getPflanzenCounts}){
       <div style={{display:"flex",gap:12,overflowX:"auto",paddingBottom:8}}>
         <div style={{width:210,flexShrink:0}}
           onDragOver={e=>e.preventDefault()}
-          onDrop={()=>{if(drag){touren.forEach(t=>{if((t.kundenIds||[]).includes(drag))remove(drag,t.id)});setDrag(null)}}}>
+          onDrop={async()=>{if(drag){await unassignAll(drag);setDrag(null)}}}>
           <div style={{fontWeight:700,fontSize:11,color:"#64748b",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 10px",marginBottom:6}}>
             Nicht zugewiesen ({unassigned.length})
           </div>
@@ -1734,20 +1811,20 @@ function Tourenplanung({kunden,touren,setTouren,onSaveTour,getPflanzenCounts}){
               <div style={{background:t.farbe+"18",border:`1px solid ${t.farbe}55`,borderRadius:9,padding:"7px 9px",marginBottom:6}}>
                 <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:5}}>
                   <div style={{width:10,height:10,borderRadius:"50%",background:t.farbe,flexShrink:0}}/>
-                  <input value={t.name}onChange={e=>upd(t.id,"name",e.target.value)}style={{flex:1,background:"transparent",border:"none",fontWeight:700,fontSize:13,color:"#0f172a",outline:"none"}}/>
-                  <button onClick={()=>setTouren(prev=>prev.filter(tt=>tt.id!==t.id))}style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:13}}>×</button>
+                  <input value={t.name}onChange={e=>upd(t.id,"name",e.target.value)}onBlur={e=>saveField(t,"name",e.target.value)}style={{flex:1,background:"transparent",border:"none",fontWeight:700,fontSize:13,color:"#0f172a",outline:"none"}}/>
+                  <button onClick={()=>deleteTour(t)}disabled={savingTour===t.id}style={{background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:13}}>×</button>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4}}>
                   <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>FAHRER</div>
-                    <input value={t.fahrer||""}onChange={e=>upd(t.id,"fahrer",e.target.value)}style={{...S.cell,fontSize:11}}/></div>
+                    <input value={t.fahrer||""}onChange={e=>upd(t.id,"fahrer",e.target.value)}onBlur={e=>saveField(t,"fahrer",e.target.value)}style={{...S.cell,fontSize:11}}/></div>
                   <div><div style={{fontSize:9,color:"#94a3b8",fontWeight:600}}>DATUM</div>
-                    <input type="date"value={t.datum||""}onChange={e=>upd(t.id,"datum",e.target.value)}style={{...S.cell,fontSize:11}}/></div>
+                    <input type="date"value={t.datum||""}onChange={e=>upd(t.id,"datum",e.target.value)}onBlur={e=>saveField(t,"datum",e.target.value)}style={{...S.cell,fontSize:11}}/></div>
                 </div>
                 <div style={{fontSize:11,color:t.farbe,fontWeight:600,marginTop:4}}>{tk.length} Kunden</div>
               </div>
               <div style={{minHeight:50,border:`2px dashed ${t.farbe}66`,borderRadius:8,padding:5}}
                 onDragOver={e=>e.preventDefault()}
-                onDrop={()=>{if(drag){assign(drag,t.id);setDrag(null)}}}>
+                onDrop={async()=>{if(drag){await assign(drag,t.id);setDrag(null)}}}>
                 {tk.map((k,idx)=>(
                   <div key={k.id}style={{background:"#fff",border:`1px solid ${t.farbe}44`,borderRadius:6,padding:"4px 7px",marginBottom:3,fontSize:11,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                     <div>
@@ -1760,7 +1837,9 @@ function Tourenplanung({kunden,touren,setTouren,onSaveTour,getPflanzenCounts}){
                 ))}
                 {tk.length===0&&<div style={{textAlign:"center",color:"#94a3b8",fontSize:10,padding:"12px 0"}}>Hier ablegen</div>}
               </div>
-              <button onClick={()=>onSaveTour(t)}style={{marginTop:5,width:"100%",background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px",fontSize:11,cursor:"pointer",color:"#374151"}}>💾 Tour speichern</button>
+              <button onClick={()=>persistTour(t)}disabled={savingTour===t.id}style={{marginTop:5,width:"100%",background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px",fontSize:11,cursor:savingTour?"wait":"pointer",color:"#374151"}}>
+                {savingTour===t.id?"⏳ Speichern…":"💾 Tour speichern"}
+              </button>
               <button onClick={()=>exportTour(t)}disabled={exporting===t.id}style={{marginTop:4,width:"100%",background:"#dbeafe",border:"1px solid #93c5fd",borderRadius:6,padding:"4px",fontSize:11,cursor:exporting?"wait":"pointer",color:"#1d4ed8",fontWeight:600}}>
                 {exporting===t.id?"⏳ …":"📄 Fahrerliste (Word)"}
               </button>
@@ -2005,15 +2084,16 @@ export default function App(){
         return;
       }
       const c=sbRef.current;
-      const[k,s,t]=await Promise.all([
+      const[k,s,tourenData]=await Promise.all([
         c.from(T.kunden).select("*").order("created_at"),
         c.from(T.formular_felder).select("*").order("sort_order"),
-        c.from(T.touren).select("*, tour_kunden(kunde_id)").order("datum"),
+        loadTourenFromDb(c),
       ]);
       if(k.error)throw k.error;
+      if(s.error)throw s.error;
       setKunden(k.data||[]);
       setSchema(s.data||[]);
-      setTouren((t.data||[]).map(tt=>({...tt,kundenIds:(tt.tour_kunden||[]).map(r=>r.kunde_id)})));
+      setTouren(tourenData);
       if(k.data?.length){setActiveId(k.data[0].id);await loadKunde(k.data[0].id,c)}
     }catch(e){
       const msg=e?.message||String(e);
@@ -2287,19 +2367,68 @@ export default function App(){
   },[]);
 
   const saveTour=async(tour)=>{
+    const{kundenIds,tour_kunden,...rest}=tour;
+    const ids=kundenIds||[];
+    const row={
+      name:rest.name||"Tour",
+      fahrer:rest.fahrer?.trim()||null,
+      datum:rest.datum?.trim()||null,
+      farbe:rest.farbe||"#10b981",
+    };
+
     if(DEMO_MODE){
-      const saved={...tour,id:tour.id||uid()};
+      const saved={...row,id:rest.id||uid(),kundenIds:ids};
       const idx=_touren.findIndex(t=>t.id===saved.id);
       if(idx>=0)_touren[idx]=saved;else _touren.push(saved);
+      setTouren(prev=>{
+        const i=prev.findIndex(t=>t.id===rest.id);
+        if(i>=0){const n=[...prev];n[i]=saved;return n}
+        return [...prev,saved];
+      });
       return saved;
     }
+
     const c=sbRef.current;
-    const{kundenIds,tour_kunden,...t}=tour;
-    const{data,error}=await c.from(T.touren).upsert(t,{onConflict:"id"}).select().single();
-    if(error)throw error;
-    await c.from(T.tour_kunden).delete().eq("tour_id",data.id);
-    if(kundenIds?.length){const rows=kundenIds.map((kid,i)=>({tour_id:data.id,kunde_id:kid,sort_order:i}));await c.from(T.tour_kunden).insert(rows)}
-    return data;
+    let data;
+    if(rest.id&&isUuid(rest.id)){
+      const{data:d,error}=await c.from(T.touren).update(row).eq("id",rest.id).select().single();
+      if(error)throw error;
+      data=d;
+    }else{
+      const{data:d,error}=await c.from(T.touren).insert(row).select().single();
+      if(error)throw error;
+      data=d;
+    }
+
+    const{error:delErr}=await c.from(T.tour_kunden).delete().eq("tour_id",data.id);
+    if(delErr)throw delErr;
+
+    if(ids.length){
+      const{error:insErr}=await c.from(T.tour_kunden).insert(ids.map((kid,i)=>({tour_id:data.id,kunde_id:kid,sort_order:i})));
+      if(insErr)throw insErr;
+    }
+
+    const saved={...data,kundenIds:ids};
+    setTouren(prev=>{
+      const i=rest.id?prev.findIndex(t=>t.id===rest.id):-1;
+      if(i>=0){const n=[...prev];n[i]=saved;return n}
+      return[...prev.filter(t=>t.id!==saved.id),saved];
+    });
+    return saved;
+  };
+
+  const deleteTour=async(tourId)=>{
+    if(DEMO_MODE){
+      _touren=_touren.filter(t=>t.id!==tourId);
+      setTouren([..._touren]);
+      return;
+    }
+    const c=sbRef.current;
+    const{error:e1}=await c.from(T.tour_kunden).delete().eq("tour_id",tourId);
+    if(e1)throw e1;
+    const{error:e2}=await c.from(T.touren).delete().eq("id",tourId);
+    if(e2)throw e2;
+    setTouren(prev=>prev.filter(t=>t.id!==tourId));
   };
 
   if(!connected)return IS_PRODUCTION?<LoginScreen onLogin={handleLogin}externalError={err}/>:null;
@@ -2434,7 +2563,7 @@ export default function App(){
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Datensatz auswählen oder + Neu</div>
             )
           ):page==="touren"?(
-            <Tourenplanung kunden={kunden}touren={touren}setTouren={setTouren}onSaveTour={saveTour}getPflanzenCounts={getPflanzenCounts}/>
+            <Tourenplanung kunden={kunden}touren={touren}setTouren={setTouren}onSaveTour={saveTour}onDeleteTour={deleteTour}onError={setErr}getPflanzenCounts={getPflanzenCounts}/>
           ):page.startsWith("cp_")?(()=>{
             const cp=customPages.find(p=>p.id===page);
             return cp?(
