@@ -1,6 +1,8 @@
 import React,{useState,useEffect,useRef,useCallback,createContext,useContext}from"react";
 import {createSupabaseClient,IS_PRODUCTION,T}from"./supabaseClient.js";
 import {exportSupabaseBackup,exportDemoBackup,downloadBackupFile}from"./backup.js";
+import {buildRechnungData,downloadRechnungDocx}from"./rechnungDocx.js";
+import {fetchPflanzenCounts,downloadTourDocx,downloadAlleTourenDocx}from"./tourDocx.js";
 
 const DEMO_MODE=!IS_PRODUCTION;
 
@@ -149,44 +151,51 @@ const TODAY=new Date().toISOString().split("T")[0];
 function fmt2(n){return isNaN(n)||n===null?"0,00":Number(n).toFixed(2).replace(".",",")}
 
 function RechnungPrintView({data,formulaMap,preisPro10cm,onClose}){
-  const pos=(data.positionen||[]).filter(p=>p.art||p.cm||effectivePreis(p,formulaMap,preisPro10cm));
-  const rabattFak=parseFloat(data.rabatt_xf)||1;
-  const sumPreis=pos.reduce((s,p)=>s+effectivePreis(p,formulaMap,preisPro10cm),0);
-  const transPreis=parseFloat(data.trans_preis)||0;
-  const duengerP=parseFloat(data.duenger_preis)||0;
-  const zusatz=(data.zusatzposten||[]).filter(z=>z.aktiv);
-  const zusatzSumme=zusatz.reduce((s,z)=>s+(parseFloat(z.preis)||0),0);
-  const netto=(sumPreis/rabattFak)+transPreis+duengerP+zusatzSumme;
-  const mwst=netto*0.19;
-  const brutto=netto+mwst;
-  const kundeName=[data.firma,data.vorname].filter(Boolean).join(" · ")||"–";
-  const addr=[data.strasse,[data.plz,data.ort].filter(Boolean).join(" ")].filter(Boolean);
+  const[wordLoading,setWordLoading]=useState(false);
+  const r=buildRechnungData(data,formulaMap,preisPro10cm,effectivePreis);
+
+  const handleWord=async()=>{
+    setWordLoading(true);
+    try{
+      const filename=await downloadRechnungDocx(r);
+      alert(`Word-Datei gespeichert:\n${filename}\n\nIn Word öffnen → Datei → Als PDF speichern`);
+    }catch(e){
+      alert("Word-Export fehlgeschlagen: "+(e?.message||String(e)));
+    }finally{
+      setWordLoading(false);
+    }
+  };
 
   return(
     <div className="rechnung-print-overlay" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:9999,overflow:"auto",display:"flex",flexDirection:"column",alignItems:"center",padding:"20px 0"}}>
-      <div className="no-print" style={{display:"flex",gap:8,marginBottom:12,flexShrink:0}}>
-        <button onClick={()=>window.print()} style={{background:"#059669",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:13,cursor:"pointer",fontWeight:700}}>🖨 Drucken / PDF speichern</button>
+      <div className="no-print" style={{display:"flex",gap:8,marginBottom:12,flexShrink:0,flexWrap:"wrap",justifyContent:"center"}}>
+        <button onClick={handleWord} disabled={wordLoading} style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:13,cursor:wordLoading?"wait":"pointer",fontWeight:700}}>
+          {wordLoading?"⏳ Erstelle Word…":"📄 Word-Datei herunterladen"}
+        </button>
         <button onClick={onClose} style={{background:"#f1f5f9",color:"#374151",border:"1px solid #ccc",borderRadius:7,padding:"7px 16px",fontSize:13,cursor:"pointer"}}>Schließen</button>
+      </div>
+      <div style={{fontSize:11,color:"#cbd5e1",marginBottom:10,textAlign:"center",maxWidth:520}}>
+        Word-Datei (.docx) herunterladen, in Word öffnen und dort als PDF speichern — sieht deutlich besser aus als Browser-Druck.
       </div>
       <div className="rechnung-print-document" style={{width:794,background:"#fff",boxShadow:"0 8px 40px rgba(0,0,0,.5)",padding:"28px 32px",fontFamily:"Arial,sans-serif",fontSize:11,color:"#111"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
           <div>
-            <div style={{fontSize:22,fontWeight:800,color:"#166534",letterSpacing:"-.02em"}}>🌿 Botanikum</div>
-            <div style={{fontSize:10,color:"#666",marginTop:4}}>Stammblatt / Rechnung {data.jahr||YEAR}</div>
+            <div style={{fontSize:22,fontWeight:800,color:"#166534",letterSpacing:"-.02em"}}>Botanikum</div>
+            <div style={{fontSize:10,color:"#666",marginTop:4}}>Rechnung / Stammblatt {r.jahr}</div>
           </div>
           <div style={{textAlign:"right",fontSize:10,color:"#555"}}>
-            <div>Datum: {TODAY}</div>
-            {data.code&&<div>Kunden-Nr.: {data.code}</div>}
-            {data.auslieferung_abholung&&<div>Lieferung: {data.auslieferung_abholung}</div>}
+            <div>Datum: {r.today}</div>
+            {r.data.code&&<div>Kunden-Nr.: {r.data.code}</div>}
+            {r.data.auslieferung_abholung&&<div>Lieferung: {r.data.auslieferung_abholung}</div>}
           </div>
         </div>
 
         <div style={{marginBottom:16,padding:"10px 12px",background:"#f8faf8",border:"1px solid #ccc",borderRadius:4}}>
           <div style={{fontSize:9,fontWeight:700,color:"#666",textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Kunde</div>
-          <div style={{fontSize:14,fontWeight:700}}>{kundeName}</div>
-          {addr.map((line,i)=><div key={i} style={{fontSize:11,color:"#333"}}>{line}</div>)}
-          {data.ortsteil&&<div style={{fontSize:10,color:"#666"}}>Ortsteil: {data.ortsteil}</div>}
-          {data.telefon&&<div style={{fontSize:10,color:"#666",marginTop:4}}>Tel.: {data.telefon}</div>}
+          <div style={{fontSize:14,fontWeight:700}}>{r.kundeName}</div>
+          {r.addr.map((line,i)=><div key={i} style={{fontSize:11,color:"#333"}}>{line}</div>)}
+          {r.data.ortsteil&&<div style={{fontSize:10,color:"#666"}}>Ortsteil: {r.data.ortsteil}</div>}
+          {r.data.telefon&&<div style={{fontSize:10,color:"#666",marginTop:4}}>Tel.: {r.data.telefon}</div>}
         </div>
 
         <table className="rechnung-table">
@@ -200,18 +209,15 @@ function RechnungPrintView({data,formulaMap,preisPro10cm,onClose}){
             </tr>
           </thead>
           <tbody>
-            {pos.length?pos.map(p=>{
-              const preis=effectivePreis(p,formulaMap,preisPro10cm);
-              return(
-                <tr key={p.label}>
-                  <td className="pos-col">{p.label}</td>
-                  <td>{p.art||"–"}</td>
-                  <td className="num">{p.anzahl||1}</td>
-                  <td className="num">{p.cm||"–"}</td>
-                  <td className="num">{preis>0?fmt2(preis):"–"}</td>
-                </tr>
-              );
-            }):(
+            {r.rows.length?r.rows.map(row=>(
+              <tr key={row.label}>
+                <td className="pos-col">{row.label}</td>
+                <td>{row.art}</td>
+                <td className="num">{row.anzahl}</td>
+                <td className="num">{row.cm}</td>
+                <td className="num">{row.preis}</td>
+              </tr>
+            )):(
               <tr><td colSpan={5} style={{textAlign:"center",color:"#888",fontStyle:"italic"}}>Keine Positionen</td></tr>
             )}
           </tbody>
@@ -220,30 +226,30 @@ function RechnungPrintView({data,formulaMap,preisPro10cm,onClose}){
         <div className="rechnung-totals">
           <table>
             <tbody>
-              <tr><td>Pflanzen gesamt</td><td>{fmt2(sumPreis)} €</td></tr>
-              {rabattFak!==1&&<tr><td>Rabatt (×{rabattFak})</td><td>{fmt2(sumPreis/rabattFak)} €</td></tr>}
-              {data.rabatt_txt&&<tr><td colSpan={2} style={{fontSize:10,color:"#666"}}>{data.rabatt_txt}</td></tr>}
-              {transPreis>0&&<tr><td>Transport{data.trans_txt?`: ${data.trans_txt}`:""}</td><td>{fmt2(transPreis)} €</td></tr>}
-              {duengerP>0&&<tr><td>Dünger{data.duenger_txt?`: ${data.duenger_txt}`:""}</td><td>{fmt2(duengerP)} €</td></tr>}
-              {zusatz.map(z=>(
+              <tr><td>Pflanzen gesamt</td><td>{fmt2(r.sumPreis)} €</td></tr>
+              {r.rabattFak!==1&&<tr><td>Rabatt (×{r.rabattFak})</td><td>{fmt2(r.sumPreis/r.rabattFak)} €</td></tr>}
+              {r.data.rabatt_txt&&<tr><td colSpan={2} style={{fontSize:10,color:"#666"}}>{r.data.rabatt_txt}</td></tr>}
+              {r.transPreis>0&&<tr><td>Transport{r.data.trans_txt?`: ${r.data.trans_txt}`:""}</td><td>{fmt2(r.transPreis)} €</td></tr>}
+              {r.duengerP>0&&<tr><td>Dünger{r.data.duenger_txt?`: ${r.data.duenger_txt}`:""}</td><td>{fmt2(r.duengerP)} €</td></tr>}
+              {r.zusatz.map(z=>(
                 <tr key={z.id}><td>{z.label}</td><td>{fmt2(parseFloat(z.preis)||0)} €</td></tr>
               ))}
-              <tr><td>Netto</td><td>{fmt2(netto)} €</td></tr>
-              <tr><td>MwSt. 19%</td><td>{fmt2(mwst)} €</td></tr>
-              <tr className="total"><td>Gesamtbetrag</td><td>{fmt2(brutto)} €</td></tr>
+              <tr><td>Netto</td><td>{fmt2(r.netto)} €</td></tr>
+              <tr><td>MwSt. 19%</td><td>{fmt2(r.mwst)} €</td></tr>
+              <tr className="total"><td>Gesamtbetrag</td><td>{fmt2(r.brutto)} €</td></tr>
             </tbody>
           </table>
         </div>
 
-        {data.bemerkungen_aktuell&&(
+        {r.data.bemerkungen_aktuell&&(
           <div style={{marginTop:20,padding:"8px 10px",border:"1px solid #ccc",background:"#f0fff0",borderRadius:4}}>
             <div style={{fontSize:9,fontWeight:700,color:"#666",marginBottom:4}}>Bemerkungen</div>
-            <div style={{fontSize:11,whiteSpace:"pre-wrap"}}>{data.bemerkungen_aktuell}</div>
+            <div style={{fontSize:11,whiteSpace:"pre-wrap"}}>{r.data.bemerkungen_aktuell}</div>
           </div>
         )}
 
         <div style={{marginTop:24,fontSize:9,color:"#999",textAlign:"center"}}>
-          Botanikum · Erstellt am {TODAY}
+          Botanikum · Erstellt am {r.today}
         </div>
       </div>
     </div>
@@ -1259,7 +1265,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
         {editMode&&<button onClick={()=>setShowAlignDialog(true)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer"}}>Ausrichten</button>}
         {editMode&&<button onClick={()=>setShowTabOrder(true)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer"}}>Tab-Reihenfolge</button>}
         {editMode&&onSaveLayoutProfile&&<button onClick={onSaveLayoutProfile}style={{background:"#0891b2",color:"#fff",border:"none",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer",fontWeight:700}}>Layout speichern</button>}
-        <button onClick={()=>setShowPrint(true)}style={{background:"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>🖨 Rechnung drucken</button>
+        <button onClick={()=>setShowPrint(true)}style={{background:"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>📄 Rechnung (Word)</button>
         <button onClick={()=>setEditMode(m=>!m)}style={{background:editMode?"#f59e0b":"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>
           {editMode?"✓ Fertig":"✏ Layout"}
         </button>
@@ -1643,8 +1649,9 @@ function Modal({title,onClose,wide,children}){
   );
 }
 
-function Tourenplanung({kunden,touren,setTouren,onSaveTour}){
+function Tourenplanung({kunden,touren,setTouren,onSaveTour,getPflanzenCounts}){
   const[drag,setDrag]=useState(null);
+  const[exporting,setExporting]=useState(null);
   const unassigned=kunden.filter(k=>!touren.some(t=>t.kundenIds?.includes(k.id)));
   const assign=(kid,tid)=>{
     setTouren(prev=>prev.map(t=>{
@@ -1661,6 +1668,35 @@ function Tourenplanung({kunden,touren,setTouren,onSaveTour}){
     catch(e){console.error(e)}
   };
   const upd=(id,k,v)=>setTouren(prev=>prev.map(t=>t.id===id?{...t,[k]:v}:t));
+
+  const exportTour=async(t)=>{
+    setExporting(t.id);
+    try{
+      const ids=t.kundenIds||[];
+      const counts=await getPflanzenCounts(ids);
+      const filename=await downloadTourDocx({tour:t,kunden, pflanzenCounts:counts});
+      alert(`Fahrerliste gespeichert:\n${filename}`);
+    }catch(e){
+      alert("Export fehlgeschlagen: "+(e?.message||String(e)));
+    }finally{
+      setExporting(null);
+    }
+  };
+
+  const exportAlle=async()=>{
+    setExporting("all");
+    try{
+      const ids=[...new Set(touren.flatMap(t=>t.kundenIds||[]))];
+      const counts=await getPflanzenCounts(ids);
+      const filename=await downloadAlleTourenDocx({touren,kunden,pflanzenCounts:counts});
+      alert(`Alle Fahrerlisten gespeichert:\n${filename}`);
+    }catch(e){
+      alert("Export fehlgeschlagen: "+(e?.message||String(e)));
+    }finally{
+      setExporting(null);
+    }
+  };
+
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -1668,7 +1704,12 @@ function Tourenplanung({kunden,touren,setTouren,onSaveTour}){
           <div style={{fontWeight:800,fontSize:18,color:"#0f172a"}}>Tourenplanung</div>
           <div style={{fontSize:12,color:"#64748b"}}>{kunden.length} Kunden · {touren.length} Touren</div>
         </div>
-        <button onClick={addTour}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,cursor:"pointer",fontWeight:700}}>+ Tour</button>
+        <div style={{display:"flex",gap:8}}>
+          {touren.length>0&&<button onClick={exportAlle}disabled={!!exporting}style={{background:"#2563eb",color:"#fff",border:"none",borderRadius:8,padding:"7px 14px",fontSize:12,cursor:exporting?"wait":"pointer",fontWeight:700}}>
+            {exporting==="all"?"⏳ …":"📄 Alle Touren (Word)"}
+          </button>}
+          <button onClick={addTour}style={{background:"#6366f1",color:"#fff",border:"none",borderRadius:8,padding:"7px 16px",fontSize:13,cursor:"pointer",fontWeight:700}}>+ Tour</button>
+        </div>
       </div>
       <div style={{display:"flex",gap:12,overflowX:"auto",paddingBottom:8}}>
         <div style={{width:210,flexShrink:0}}
@@ -1720,6 +1761,9 @@ function Tourenplanung({kunden,touren,setTouren,onSaveTour}){
                 {tk.length===0&&<div style={{textAlign:"center",color:"#94a3b8",fontSize:10,padding:"12px 0"}}>Hier ablegen</div>}
               </div>
               <button onClick={()=>onSaveTour(t)}style={{marginTop:5,width:"100%",background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:6,padding:"4px",fontSize:11,cursor:"pointer",color:"#374151"}}>💾 Tour speichern</button>
+              <button onClick={()=>exportTour(t)}disabled={exporting===t.id}style={{marginTop:4,width:"100%",background:"#dbeafe",border:"1px solid #93c5fd",borderRadius:6,padding:"4px",fontSize:11,cursor:exporting?"wait":"pointer",color:"#1d4ed8",fontWeight:600}}>
+                {exporting===t.id?"⏳ …":"📄 Fahrerliste (Word)"}
+              </button>
             </div>
           );
         })}
@@ -2237,6 +2281,11 @@ export default function App(){
     finally{setBackingUp(false)}
   };
 
+  const getPflanzenCounts=useCallback(async(kundeIds)=>{
+    if(DEMO_MODE)return fetchPflanzenCounts(null,kundeIds,_positionen);
+    return fetchPflanzenCounts(sbRef.current,kundeIds);
+  },[]);
+
   const saveTour=async(tour)=>{
     if(DEMO_MODE){
       const saved={...tour,id:tour.id||uid()};
@@ -2385,7 +2434,7 @@ export default function App(){
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100%",color:"#888"}}>Datensatz auswählen oder + Neu</div>
             )
           ):page==="touren"?(
-            <Tourenplanung kunden={kunden}touren={touren}setTouren={setTouren}onSaveTour={saveTour}/>
+            <Tourenplanung kunden={kunden}touren={touren}setTouren={setTouren}onSaveTour={saveTour}getPflanzenCounts={getPflanzenCounts}/>
           ):page.startsWith("cp_")?(()=>{
             const cp=customPages.find(p=>p.id===page);
             return cp?(
