@@ -1,5 +1,6 @@
 import React,{useState,useEffect,useRef,useCallback,createContext,useContext}from"react";
 import {createSupabaseClient,IS_PRODUCTION,T}from"./supabaseClient.js";
+import {exportSupabaseBackup,exportDemoBackup,downloadBackupFile}from"./backup.js";
 
 const DEMO_MODE=!IS_PRODUCTION;
 
@@ -1860,6 +1861,7 @@ export default function App(){
   const[activeLayoutId,setActiveLayoutId]=useState("layout_main");
   const[editingLayoutName,setEditingLayoutName]=useState(null);
   const[importing,setImporting]=useState(false);
+  const[backingUp,setBackingUp]=useState(false);
   const[kundenSearch,setKundenSearch]=useState("");
   const[searchField,setSearchField]=useState("all");
 
@@ -2168,6 +2170,22 @@ export default function App(){
     finally{setImporting(false)}
   };
 
+  const downloadBackup=async()=>{
+    setBackingUp(true);setErr(null);
+    try{
+      let payload;
+      if(DEMO_MODE){
+        payload=exportDemoBackup({kunden:_kunden,positionenByKunde:_positionen,touren:_touren,schema:_schema});
+      }else{
+        payload=await exportSupabaseBackup(sbRef.current);
+      }
+      const filename=downloadBackupFile(payload);
+      const warn=payload.meta.warnings?.length?"\n\nHinweis:\n"+payload.meta.warnings.join("\n"):"";
+      alert(`Backup gespeichert: ${filename}\n\n${payload.meta.recordCount} Datensätze${warn}`);
+    }catch(e){setErr("Backup fehlgeschlagen: "+(e?.message||String(e)))}
+    finally{setBackingUp(false)}
+  };
+
   const saveTour=async(tour)=>{
     if(DEMO_MODE){
       const saved={...tour,id:tour.id||uid()};
@@ -2275,6 +2293,9 @@ export default function App(){
           {!DEMO_MODE&&<button onClick={importFromGaertnerei}disabled={importing}style={{background:"rgba(5,150,105,.25)",color:"#4ade80",border:"1px solid rgba(5,150,105,.4)",borderRadius:6,padding:"5px",fontSize:11,cursor:importing?"wait":"pointer"}}>
             {importing?"⏳ Import…":"📥 Aus Gärtnerei importieren"}
           </button>}
+          <button onClick={downloadBackup}disabled={backingUp}style={{background:"rgba(59,130,246,.2)",color:"#93c5fd",border:"1px solid rgba(59,130,246,.35)",borderRadius:6,padding:"5px",fontSize:11,cursor:backingUp?"wait":"pointer"}}>
+            {backingUp?"⏳ Backup…":"💾 Backup herunterladen"}
+          </button>
           <button onClick={()=>setModal("builder")}style={{background:"rgba(99,102,241,.25)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,.3)",borderRadius:6,padding:"5px",fontSize:11,cursor:"pointer"}}>⚙ Felder-Builder</button>
           <button onClick={()=>setModal("valuelists")}style={{background:"rgba(99,102,241,.15)",color:"#a5b4fc",border:"1px solid rgba(99,102,241,.25)",borderRadius:6,padding:"5px",fontSize:11,cursor:"pointer"}}>📋 Wertelisten</button>
         </div>
