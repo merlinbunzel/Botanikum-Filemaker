@@ -10,3 +10,211 @@ body {
   width: 100%;
   min-height: 100vh;
 }
+
+/* Positionen-Tabelle: feste Spalten für exakte Ausrichtung */
+.pos-table {
+  display: grid;
+  grid-template-columns: 36px minmax(140px, 1fr) 64px 64px 88px;
+  border: 1px solid #999;
+  font-size: 11px;
+}
+
+.pos-table-head {
+  display: contents;
+}
+
+.pos-table-head > div {
+  padding: 4px 6px;
+  font-weight: 700;
+  font-size: 10px;
+  background: #e8e8e0;
+  border-bottom: 1px solid #999;
+  border-right: 1px solid #999;
+}
+
+.pos-table-head > div:last-child {
+  border-right: none;
+}
+
+.pos-table-head > div.pos-num {
+  text-align: right;
+}
+
+.pos-table-row {
+  display: contents;
+}
+
+.pos-table-row > div {
+  border-bottom: 1px solid #ccc;
+  border-right: 1px solid #ccc;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+}
+
+.pos-table-row > div:last-child {
+  border-right: none;
+}
+
+.pos-table-row.odd > div {
+  background: #fff;
+}
+
+.pos-table-row.even > div {
+  background: #f9f9f0;
+}
+
+.pos-table-row input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.pos-table-foot {
+  display: contents;
+}
+
+.pos-table-foot > div {
+  padding: 4px 6px;
+  font-weight: 700;
+  background: #e8e8d0;
+  border-top: 1px solid #999;
+  border-right: 1px solid #ccc;
+}
+
+.pos-table-foot > div:last-child {
+  border-right: none;
+}
+
+.pos-table .pos-label {
+  padding: 4px 6px;
+  font-weight: 700;
+  color: #555;
+  justify-content: center;
+}
+
+.pos-table .pos-price {
+  justify-content: flex-end;
+  padding: 4px 6px;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.pos-table .pos-num {
+  justify-content: flex-end;
+}
+
+/* Rechnung drucken */
+@media print {
+  @page {
+    margin: 14mm;
+    size: A4;
+  }
+
+  body {
+    background: #fff !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .rechnung-print-overlay,
+  .rechnung-print-overlay * {
+    visibility: visible;
+  }
+
+  .no-print,
+  .no-print * {
+    visibility: hidden !important;
+    display: none !important;
+  }
+
+  .rechnung-print-overlay {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    inset: auto !important;
+    background: none !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    width: 100% !important;
+  }
+
+  .rechnung-print-document {
+    box-shadow: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}
+
+.rechnung-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin: 12px 0;
+}
+
+.rechnung-table th,
+.rechnung-table td {
+  border: 1px solid #333;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.rechnung-table th {
+  background: #eee;
+  font-weight: 700;
+}
+
+.rechnung-table .num {
+  text-align: right;
+  font-family: monospace;
+}
+
+.rechnung-table .pos-col {
+  width: 36px;
+  text-align: center;
+}
+
+.rechnung-table .preis-col {
+  width: 88px;
+}
+
+.rechnung-totals {
+  margin-left: auto;
+  width: 280px;
+  font-size: 11px;
+}
+
+.rechnung-totals table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.rechnung-totals td {
+  padding: 3px 6px;
+}
+
+.rechnung-totals td:last-child {
+  text-align: right;
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.rechnung-totals tr.total td {
+  font-weight: 800;
+  font-size: 13px;
+  border-top: 2px solid #333;
+  padding-top: 6px;
+}

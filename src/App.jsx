@@ -147,6 +147,108 @@ const sb=makeSb();
 const YEAR=new Date().getFullYear();
 const TODAY=new Date().toISOString().split("T")[0];
 function fmt2(n){return isNaN(n)||n===null?"0,00":Number(n).toFixed(2).replace(".",",")}
+
+function RechnungPrintView({data,formulaMap,preisPro10cm,onClose}){
+  const pos=(data.positionen||[]).filter(p=>p.art||p.cm||effectivePreis(p,formulaMap,preisPro10cm));
+  const rabattFak=parseFloat(data.rabatt_xf)||1;
+  const sumPreis=pos.reduce((s,p)=>s+effectivePreis(p,formulaMap,preisPro10cm),0);
+  const transPreis=parseFloat(data.trans_preis)||0;
+  const duengerP=parseFloat(data.duenger_preis)||0;
+  const zusatz=(data.zusatzposten||[]).filter(z=>z.aktiv);
+  const zusatzSumme=zusatz.reduce((s,z)=>s+(parseFloat(z.preis)||0),0);
+  const netto=(sumPreis/rabattFak)+transPreis+duengerP+zusatzSumme;
+  const mwst=netto*0.19;
+  const brutto=netto+mwst;
+  const kundeName=[data.firma,data.vorname].filter(Boolean).join(" · ")||"–";
+  const addr=[data.strasse,[data.plz,data.ort].filter(Boolean).join(" ")].filter(Boolean);
+
+  return(
+    <div className="rechnung-print-overlay" style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:9999,overflow:"auto",display:"flex",flexDirection:"column",alignItems:"center",padding:"20px 0"}}>
+      <div className="no-print" style={{display:"flex",gap:8,marginBottom:12,flexShrink:0}}>
+        <button onClick={()=>window.print()} style={{background:"#059669",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:13,cursor:"pointer",fontWeight:700}}>🖨 Drucken / PDF speichern</button>
+        <button onClick={onClose} style={{background:"#f1f5f9",color:"#374151",border:"1px solid #ccc",borderRadius:7,padding:"7px 16px",fontSize:13,cursor:"pointer"}}>Schließen</button>
+      </div>
+      <div className="rechnung-print-document" style={{width:794,background:"#fff",boxShadow:"0 8px 40px rgba(0,0,0,.5)",padding:"28px 32px",fontFamily:"Arial,sans-serif",fontSize:11,color:"#111"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+          <div>
+            <div style={{fontSize:22,fontWeight:800,color:"#166534",letterSpacing:"-.02em"}}>🌿 Botanikum</div>
+            <div style={{fontSize:10,color:"#666",marginTop:4}}>Stammblatt / Rechnung {data.jahr||YEAR}</div>
+          </div>
+          <div style={{textAlign:"right",fontSize:10,color:"#555"}}>
+            <div>Datum: {TODAY}</div>
+            {data.code&&<div>Kunden-Nr.: {data.code}</div>}
+            {data.auslieferung_abholung&&<div>Lieferung: {data.auslieferung_abholung}</div>}
+          </div>
+        </div>
+
+        <div style={{marginBottom:16,padding:"10px 12px",background:"#f8faf8",border:"1px solid #ccc",borderRadius:4}}>
+          <div style={{fontSize:9,fontWeight:700,color:"#666",textTransform:"uppercase",letterSpacing:".06em",marginBottom:4}}>Kunde</div>
+          <div style={{fontSize:14,fontWeight:700}}>{kundeName}</div>
+          {addr.map((line,i)=><div key={i} style={{fontSize:11,color:"#333"}}>{line}</div>)}
+          {data.ortsteil&&<div style={{fontSize:10,color:"#666"}}>Ortsteil: {data.ortsteil}</div>}
+          {data.telefon&&<div style={{fontSize:10,color:"#666",marginTop:4}}>Tel.: {data.telefon}</div>}
+        </div>
+
+        <table className="rechnung-table">
+          <thead>
+            <tr>
+              <th className="pos-col">Pos</th>
+              <th>Pflanzenart / Beschreibung</th>
+              <th className="num" style={{width:48}}>Anz.</th>
+              <th className="num" style={{width:48}}>cm</th>
+              <th className="num preis-col">Preis €</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pos.length?pos.map(p=>{
+              const preis=effectivePreis(p,formulaMap,preisPro10cm);
+              return(
+                <tr key={p.label}>
+                  <td className="pos-col">{p.label}</td>
+                  <td>{p.art||"–"}</td>
+                  <td className="num">{p.anzahl||1}</td>
+                  <td className="num">{p.cm||"–"}</td>
+                  <td className="num">{preis>0?fmt2(preis):"–"}</td>
+                </tr>
+              );
+            }):(
+              <tr><td colSpan={5} style={{textAlign:"center",color:"#888",fontStyle:"italic"}}>Keine Positionen</td></tr>
+            )}
+          </tbody>
+        </table>
+
+        <div className="rechnung-totals">
+          <table>
+            <tbody>
+              <tr><td>Pflanzen gesamt</td><td>{fmt2(sumPreis)} €</td></tr>
+              {rabattFak!==1&&<tr><td>Rabatt (×{rabattFak})</td><td>{fmt2(sumPreis/rabattFak)} €</td></tr>}
+              {data.rabatt_txt&&<tr><td colSpan={2} style={{fontSize:10,color:"#666"}}>{data.rabatt_txt}</td></tr>}
+              {transPreis>0&&<tr><td>Transport{data.trans_txt?`: ${data.trans_txt}`:""}</td><td>{fmt2(transPreis)} €</td></tr>}
+              {duengerP>0&&<tr><td>Dünger{data.duenger_txt?`: ${data.duenger_txt}`:""}</td><td>{fmt2(duengerP)} €</td></tr>}
+              {zusatz.map(z=>(
+                <tr key={z.id}><td>{z.label}</td><td>{fmt2(parseFloat(z.preis)||0)} €</td></tr>
+              ))}
+              <tr><td>Netto</td><td>{fmt2(netto)} €</td></tr>
+              <tr><td>MwSt. 19%</td><td>{fmt2(mwst)} €</td></tr>
+              <tr className="total"><td>Gesamtbetrag</td><td>{fmt2(brutto)} €</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        {data.bemerkungen_aktuell&&(
+          <div style={{marginTop:20,padding:"8px 10px",border:"1px solid #ccc",background:"#f0fff0",borderRadius:4}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#666",marginBottom:4}}>Bemerkungen</div>
+            <div style={{fontSize:11,whiteSpace:"pre-wrap"}}>{data.bemerkungen_aktuell}</div>
+          </div>
+        )}
+
+        <div style={{marginTop:24,fontSize:9,color:"#999",textAlign:"center"}}>
+          Botanikum · Erstellt am {TODAY}
+        </div>
+      </div>
+    </div>
+  );
+}
 function uid(){return Math.random().toString(36).slice(2,10)}
 
 function syncCodeKdr(k){
@@ -456,7 +558,6 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
 
   const sumCm=positionen.reduce((s,p)=>s+(parseFloat(p.cm)||0),0);
   const sumPreis=positionen.reduce((s,p)=>s+(parseFloat(resolvePreis(p))||0),0);
-  const colFlex=[["Pos",.4],["Pflanzenart / Beschreibung",4],["Anzahl",1],["cm",1],["€-Preis",1]];
 
   return(
     <div>
@@ -481,48 +582,52 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
         </div>
         {quickMsg&&<div style={{fontSize:9,color:quickMsg.includes("nicht")?"#b91c1c":"#059669",marginTop:3,fontWeight:600}}>{quickMsg}</div>}
       </div>
-      <div style={{display:"flex",gap:0,background:"#ddd",border:"1px solid #999",borderBottom:"none",alignItems:"stretch"}}>
-        {colFlex.map(([h,f])=>(
-          <div key={h} style={{flex:f,padding:"3px 6px",fontWeight:700,fontSize:10,borderRight:"1px solid #999",background:"#e8e8e0"}}>{h}</div>
-        ))}
-      </div>
+      <div className="pos-table">
+        <div className="pos-table-head">
+          <div>Pos</div>
+          <div>Pflanzenart / Beschreibung</div>
+          <div className="pos-num">Anzahl</div>
+          <div className="pos-num">cm</div>
+          <div className="pos-num">€-Preis</div>
+        </div>
 
-      {positionen.map((p,i)=>{
-        const hasFormel=!!formulaMap[p.label];
-        const hasAuto=rateActive&&!hasFormel;
-        const preisVal=resolvePreis(p);
-        return(
-          <div key={i} style={{display:"flex",gap:0,border:"1px solid #ccc",borderTop:"none",background:i%2===0?"#fff":"#f9f9f0"}}>
-            <div style={{flex:.4,padding:"1px 5px",borderRight:"1px solid #ccc",fontSize:11,fontWeight:700,color:"#555",display:"flex",alignItems:"center",minWidth:26}}>{p.label}</div>
-            <div style={{flex:4,borderRight:"1px solid #ccc"}}>
-              <input value={p.art||""} onChange={e=>setPos(i,"art",e.target.value)} style={{...S.cell,border:"none",background:"transparent"}}/>
+        {positionen.map((p,i)=>{
+          const hasFormel=!!formulaMap[p.label];
+          const hasAuto=rateActive&&!hasFormel;
+          const preisVal=resolvePreis(p);
+          return(
+            <div key={i} className={`pos-table-row ${i%2===0?"odd":"even"}`}>
+              <div className="pos-label">{p.label}</div>
+              <div>
+                <input value={p.art||""} onChange={e=>setPos(i,"art",e.target.value)}/>
+              </div>
+              <div className="pos-num">
+                <input type="number" value={p.anzahl||""} onChange={e=>setPos(i,"anzahl",e.target.value)} placeholder="1" style={{textAlign:"right"}}/>
+              </div>
+              <div className="pos-num">
+                <input type="number" value={p.cm||""} onChange={e=>setPos(i,"cm",e.target.value)} style={{textAlign:"right",background:hasAuto?"#f0fdf4":"transparent"}}/>
+              </div>
+              <div className="pos-num">
+                {hasFormel||hasAuto?(
+                  <div className="pos-price" style={{background:hasFormel?"#ede9fe":"#d1fae5",color:hasFormel?"#5b21b6":"#065f46",width:"100%"}}>
+                    <span style={{fontSize:9,opacity:.7,marginRight:3}}>{hasFormel?"ƒ":"⌀"}</span>
+                    {preisVal>0?fmt2(preisVal):"–"}
+                  </div>
+                ):(
+                  <input type="number" value={p.preis||""} onChange={e=>setPos(i,"preis",e.target.value)} style={{textAlign:"right"}}/>
+                )}
+              </div>
             </div>
-            <div style={{flex:1,borderRight:"1px solid #ccc"}}>
-              <input type="number" value={p.anzahl||""} onChange={e=>setPos(i,"anzahl",e.target.value)} placeholder="1" style={{...S.cell,border:"none",background:"transparent",textAlign:"right"}}/>
-            </div>
-            <div style={{flex:1,borderRight:"1px solid #ccc"}}>
-              <input type="number" value={p.cm||""} onChange={e=>setPos(i,"cm",e.target.value)} style={{...S.cell,border:"none",background:hasAuto?"#f0fdf4":"transparent",textAlign:"right"}}/>
-            </div>
-            <div style={{flex:1,borderRight:"1px solid #ccc",position:"relative"}}>
-              {hasFormel||hasAuto?(
-                <div style={{...S.cell,border:"none",background:hasFormel?"#ede9fe":"#d1fae5",color:hasFormel?"#5b21b6":"#065f46",fontWeight:700,fontFamily:"monospace",textAlign:"right",padding:"2px 5px",display:"flex",alignItems:"center",justifyContent:"flex-end",gap:3}}>
-                  <span style={{fontSize:9,opacity:.7}}>{hasFormel?"ƒ":"⌀"}</span>
-                  {preisVal>0?fmt2(preisVal):"–"}
-                </div>
-              ):(
-                <input type="number" value={p.preis||""} onChange={e=>setPos(i,"preis",e.target.value)} style={{...S.cell,border:"none",background:"transparent",textAlign:"right"}}/>
-              )}
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
 
-      <div style={{display:"flex",border:"1px solid #ccc",borderTop:"none",background:"#e8e8d0",fontWeight:700,fontSize:11}}>
-        <div style={{flex:.4,padding:"3px 5px",borderRight:"1px solid #ccc"}}/>
-        <div style={{flex:4,padding:"3px 8px",borderRight:"1px solid #ccc"}}>Summe</div>
-        <div style={{flex:1,padding:"3px 6px",borderRight:"1px solid #ccc"}}/>
-        <div style={{flex:1,padding:"3px 6px",borderRight:"1px solid #ccc",textAlign:"right"}}>{sumCm} cm</div>
-        <div style={{flex:1,padding:"3px 6px",textAlign:"right"}}>{fmt2(sumPreis)} €</div>
+        <div className="pos-table-foot">
+          <div/>
+          <div>Summe</div>
+          <div/>
+          <div className="pos-num">{sumCm} cm</div>
+          <div className="pos-num">{fmt2(sumPreis)} €</div>
+        </div>
       </div>
 
       {showFormulas&&(
@@ -1154,7 +1259,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
         {editMode&&<button onClick={()=>setShowAlignDialog(true)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer"}}>Ausrichten</button>}
         {editMode&&<button onClick={()=>setShowTabOrder(true)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #e2e8f0",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer"}}>Tab-Reihenfolge</button>}
         {editMode&&onSaveLayoutProfile&&<button onClick={onSaveLayoutProfile}style={{background:"#0891b2",color:"#fff",border:"none",borderRadius:5,padding:"2px 9px",fontSize:11,cursor:"pointer",fontWeight:700}}>Layout speichern</button>}
-        <button onClick={()=>setShowPrint(true)}style={{background:"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>🖨 Drucken</button>
+        <button onClick={()=>setShowPrint(true)}style={{background:"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>🖨 Rechnung drucken</button>
         <button onClick={()=>setEditMode(m=>!m)}style={{background:editMode?"#f59e0b":"#475569",color:"#fff",border:"none",borderRadius:6,padding:"3px 12px",fontSize:11,cursor:"pointer",fontWeight:700}}>
           {editMode?"✓ Fertig":"✏ Layout"}
         </button>
@@ -1313,61 +1418,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
         </div>
       )}
 
-      {/* Print Preview Modal */}
-      {showPrint&&(
-        <>
-          <style>{`@media print{body>*{display:none!important;}.print-preview-content{display:block!important;position:static!important;width:100%!important;max-width:none!important;}}`}</style>
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",zIndex:9999,overflow:"auto",display:"flex",flexDirection:"column",alignItems:"center",padding:"20px 0"}}>
-            <div style={{display:"flex",gap:8,marginBottom:12,flexShrink:0}}>
-              <button onClick={()=>window.print()}style={{background:"#059669",color:"#fff",border:"none",borderRadius:7,padding:"7px 18px",fontSize:13,cursor:"pointer",fontWeight:700}}>🖨 Drucken</button>
-              <button onClick={()=>setShowPrint(false)}style={{background:"#f1f5f9",color:"#374151",border:"1px solid #ccc",borderRadius:7,padding:"7px 16px",fontSize:13,cursor:"pointer"}}>Schließen</button>
-            </div>
-            <div className="print-preview-content"style={{width:794,background:"#fff",boxShadow:"0 8px 40px rgba(0,0,0,.5)",padding:"28px 32px",fontFamily:"Arial,sans-serif",fontSize:11,color:"#111"}}>
-              {(()=>{
-                const partOrder=["title_header","header","subsummary_above","body","subsummary_below","summary","footer","title_footer"];
-                const partOrderMap=Object.fromEntries(partOrder.map((t,i)=>[t,i]));
-                const sorted=[...layout].sort((a,b)=>(partOrderMap[a.partType||"body"]??99)-(partOrderMap[b.partType||"body"]??99));
-                return sorted.filter(s=>s.visible).map((s,i)=>{
-                  const pt=PART_TYPE_MAP[s.partType||"body"]||PART_TYPE_MAP.body;
-                  const isRepeat=["header","footer","title_header","title_footer"].includes(s.partType);
-                  const isSub=["subsummary_above","subsummary_below"].includes(s.partType);
-                  const isSummary=s.partType==="summary";
-                  return(
-                    <div key={s.id}style={{marginBottom:10,pageBreakInside:"avoid"}}>
-                      {i>0&&pt&&<div style={{borderTop:"1px dashed #ccc",marginBottom:6,paddingTop:4,fontSize:9,color:"#aaa",letterSpacing:".04em",textTransform:"uppercase"}}>{pt.label}</div>}
-                      {isRepeat&&<div style={{fontSize:9,color:"#999",fontStyle:"italic",marginBottom:4,textAlign:"center"}}>— wiederholt auf jeder Seite —</div>}
-                      {isSub&&<div style={{fontSize:9,color:"#999",fontStyle:"italic",textAlign:"center",padding:"4px",background:"#f0f4ff",borderRadius:3,marginBottom:4}}>— gruppiert nach Feld —</div>}
-                      {isSummary?(
-                        <div style={{background:"#f0fff0",border:"1px solid #99cc99",padding:"6px 10px",borderRadius:3}}>
-                          <div style={{fontWeight:700,fontSize:11,marginBottom:3}}>Zusammenfassung</div>
-                          <div style={{display:"flex",gap:16,fontSize:11}}>
-                            <span>Endsumme netto: <strong>{fmt2((sumPreis/rabattFak)+transPreis+duengerP+zusatzSumme)} €</strong></span>
-                            <span>Gesamt (inkl. 19%): <strong>{fmt2(endsumme)} €</strong></span>
-                          </div>
-                        </div>
-                      ):(
-                        <div style={{fontSize:11}}>
-                          <strong style={{fontSize:10,color:"#555"}}>{s.label}</strong>
-                          <div style={{marginTop:2,paddingLeft:4,color:"#333"}}>
-                            {s.id==="adresse"&&<span>{data.firma||data.vorname} · {data.strasse} · {data.plz} {data.ort}</span>}
-                            {s.id==="kopf"&&<span>Jahr: {data.jahr} | Code/Kdr: {data.code||data.kdr} | {data.auslieferung_abholung?"Lieferdatum: "+data.auslieferung_abholung:""}</span>}
-                            {s.id==="bemerkungen_aktuell"&&<span>{data.bemerkungen_aktuell}</span>}
-                            {s.id==="positionen"&&<span>{pos.filter(p=>p.art).map(p=>`${p.label}: ${p.art} (${p.cm}cm, ${p.anzahl}x, ${fmt2(p.preis)}€)`).join(" | ")}</span>}
-                            {s.id==="transport"&&<span>{data.trans_txt} {data.trans_preis?fmt2(data.trans_preis)+" €":""}</span>}
-                            {s.id==="duenger"&&<span>{data.duenger_txt} {data.duenger_preis?fmt2(data.duenger_preis)+" €":""}</span>}
-                            {s.id==="rabatt"&&<span>{data.rabatt_txt} {data.gutschein?"| Gutschein: "+data.gutschein:""}</span>}
-                            {s.id==="sonstiges"&&<span>{data.camelia} {data.vapiano_pflanzen}</span>}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                });
-              })()}
-            </div>
-          </div>
-        </>
-      )}
+      {showPrint&&<RechnungPrintView data={data} formulaMap={formulaMap} preisPro10cm={preisPro10cm} onClose={()=>setShowPrint(false)}/>}
     </div>
     </LabelCtx.Provider>
   );
