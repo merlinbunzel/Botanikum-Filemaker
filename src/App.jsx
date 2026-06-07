@@ -5,9 +5,9 @@ const DEMO_MODE=!IS_PRODUCTION;
 
 // ── DUMMY IN-MEMORY STORE ──────────────────────────────────────
 let _kunden=[
-  {id:"k1",firma:"Gasthaus Zur Linde",vorname:"Maria",plz:"80331",ort:"München",strasse:"Ludwigstr. 12",telefon:"089 123456",email:"info@linde.de",code:"LIN-01",jahr:"2026",rabatt_xf:1,restbetrag:"450,00",zugesagt:true,abholung:"Abholung",umtopfarbeiten:"erledigt",osteria:"",vapiano:"350,00",total_aktuell:"1200",total_vorjahr:"980",alte_cm:"",kdr:"3",neukunde:false,auslieferung_abholung:"2026-04-10",ausgeliefert_am:"",ersatzpflanzen:"",ortsteil:"Maxvorstadt",lieferadresse:"",mail:"Newsletter",bemerkungen_aktuell:"Olivenbaum war sehr gut, nächstes Jahr 2 Stück",bemerkungen_2022:"Erstkunde 2022",bemerkungen_2023:"Zufrieden",bemerkungen_2024:"Lieferung verzögert",bemerkungen_2025:"Stammkunde",restpflanzen:"",restpflanzen_info:"",trans_txt:"Kleintransporter",trans_preis:85,duenger_txt:"Langzeitdünger",duenger_preis:12,zeit_abholung:"",rabatt_txt:"Stammkunde 5%",gutschein:"",transportdauer:"ca. 30 min",camelia:"",vapiano_pflanzen:""},
-  {id:"k2",firma:"Vapiano GmbH",vorname:"Thomas",plz:"10115",ort:"Berlin",strasse:"Unter den Linden 5",telefon:"030 654321",email:"thomas@vapiano.de",code:"VAP-02",jahr:"2026",rabatt_xf:1.05,restbetrag:"",zugesagt:false,abholung:"",umtopfarbeiten:"",osteria:"",vapiano:"",total_aktuell:"850",total_vorjahr:"720",alte_cm:"",kdr:"2",neukunde:false,auslieferung_abholung:"2026-05-01",ausgeliefert_am:"",ersatzpflanzen:"",ortsteil:"Mitte",lieferadresse:"Hintereingang Küche",mail:"",bemerkungen_aktuell:"Bitte morgens liefern",bemerkungen_2022:"",bemerkungen_2023:"Neukunde",bemerkungen_2024:"",bemerkungen_2025:"",restpflanzen:"",restpflanzen_info:"",trans_txt:"",trans_preis:0,duenger_txt:"",duenger_preis:0,zeit_abholung:"",rabatt_txt:"",gutschein:"",transportdauer:"",camelia:"",vapiano_pflanzen:"Ficus, Olive"},
-  {id:"k3",firma:"",vorname:"Anna Müller",plz:"22303",ort:"Hamburg",strasse:"Eppendorfer Weg 88",telefon:"040 998877",email:"anna.mueller@gmail.com",code:"MUE-03",jahr:"2026",rabatt_xf:1,restbetrag:"",zugesagt:true,abholung:"",umtopfarbeiten:"",osteria:"",vapiano:"",total_aktuell:"320",total_vorjahr:"",alte_cm:"",kdr:"1",neukunde:true,auslieferung_abholung:"",ausgeliefert_am:"",ersatzpflanzen:"",ortsteil:"Eppendorf",lieferadresse:"",mail:"",bemerkungen_aktuell:"Neukunde – Balkon bepflanzen",bemerkungen_2022:"",bemerkungen_2023:"",bemerkungen_2024:"",bemerkungen_2025:"",restpflanzen:"",restpflanzen_info:"",trans_txt:"",trans_preis:0,duenger_txt:"",duenger_preis:0,zeit_abholung:"10:00",rabatt_txt:"",gutschein:"",transportdauer:"",camelia:"",vapiano_pflanzen:""},
+  {id:"k1",firma:"Gasthaus Zur Linde",vorname:"Maria",plz:"80331",ort:"München",strasse:"Ludwigstr. 12",telefon:"089 123456",email:"info@linde.de",code:"LIN-01",jahr:"2026",rabatt_xf:1,restbetrag:"450,00",zugesagt:true,abholung:"Abholung",umtopfarbeiten:"erledigt",osteria:"",vapiano:"350,00",total_aktuell:"1200",total_vorjahr:"980",alte_cm:"",kdr:"LIN-01",neukunde:false,auslieferung_abholung:"2026-04-10",ausgeliefert_am:"",ersatzpflanzen:"",ortsteil:"Maxvorstadt",lieferadresse:"",mail:"Newsletter",bemerkungen_aktuell:"Olivenbaum war sehr gut, nächstes Jahr 2 Stück",bemerkungen_2022:"Erstkunde 2022",bemerkungen_2023:"Zufrieden",bemerkungen_2024:"Lieferung verzögert",bemerkungen_2025:"Stammkunde",restpflanzen:"",restpflanzen_info:"",trans_txt:"Kleintransporter",trans_preis:85,duenger_txt:"Langzeitdünger",duenger_preis:12,zeit_abholung:"",rabatt_txt:"Stammkunde 5%",gutschein:"",transportdauer:"ca. 30 min",camelia:"",vapiano_pflanzen:""},
+  {id:"k2",firma:"Vapiano GmbH",vorname:"Thomas",plz:"10115",ort:"Berlin",strasse:"Unter den Linden 5",telefon:"030 654321",email:"thomas@vapiano.de",code:"VAP-02",jahr:"2026",rabatt_xf:1.05,restbetrag:"",zugesagt:false,abholung:"",umtopfarbeiten:"",osteria:"",vapiano:"",total_aktuell:"850",total_vorjahr:"720",alte_cm:"",kdr:"VAP-02",neukunde:false,auslieferung_abholung:"2026-05-01",ausgeliefert_am:"",ersatzpflanzen:"",ortsteil:"Mitte",lieferadresse:"Hintereingang Küche",mail:"",bemerkungen_aktuell:"Bitte morgens liefern",bemerkungen_2022:"",bemerkungen_2023:"Neukunde",bemerkungen_2024:"",bemerkungen_2025:"",restpflanzen:"",restpflanzen_info:"",trans_txt:"",trans_preis:0,duenger_txt:"",duenger_preis:0,zeit_abholung:"",rabatt_txt:"",gutschein:"",transportdauer:"",camelia:"",vapiano_pflanzen:"Ficus, Olive"},
+  {id:"k3",firma:"",vorname:"Anna Müller",plz:"22303",ort:"Hamburg",strasse:"Eppendorfer Weg 88",telefon:"040 998877",email:"anna.mueller@gmail.com",code:"MUE-03",jahr:"2026",rabatt_xf:1,restbetrag:"",zugesagt:true,abholung:"",umtopfarbeiten:"",osteria:"",vapiano:"",total_aktuell:"320",total_vorjahr:"",alte_cm:"",kdr:"MUE-03",neukunde:true,auslieferung_abholung:"",ausgeliefert_am:"",ersatzpflanzen:"",ortsteil:"Eppendorf",lieferadresse:"",mail:"",bemerkungen_aktuell:"Neukunde – Balkon bepflanzen",bemerkungen_2022:"",bemerkungen_2023:"",bemerkungen_2024:"",bemerkungen_2025:"",restpflanzen:"",restpflanzen_info:"",trans_txt:"",trans_preis:0,duenger_txt:"",duenger_preis:0,zeit_abholung:"10:00",rabatt_txt:"",gutschein:"",transportdauer:"",camelia:"",vapiano_pflanzen:""},
 ];
 let _positionen={
   k1:[{id:"p1",kunde_id:"k1",label:"P1",sort_order:0,art:"Olivenbaum Arbequina",cm:180,preis:320,anzahl:1},{id:"p2",kunde_id:"k1",label:"P2",sort_order:1,art:"Lavendel Hidcote",cm:40,preis:18,anzahl:3},{id:"p3",kunde_id:"k1",label:"P3",sort_order:2,art:"Rosmarin aufrecht",cm:60,preis:22,anzahl:2}],
@@ -72,7 +72,7 @@ const KNOWN_FIELDS=[
   {key:"firma",label:"Firma"},{key:"vorname",label:"Vorname"},
   {key:"plz",label:"PLZ"},{key:"ort",label:"Ort"},
   {key:"strasse",label:"Straße"},{key:"telefon",label:"Telefon"},
-  {key:"email",label:"E-Mail"},{key:"code",label:"Code"},
+  {key:"email",label:"E-Mail"},{key:"code",label:"Code / Kdr"},
   {key:"jahr",label:"Jahr"},{key:"restbetrag",label:"Restbetrag"},
   {key:"bemerkungen_aktuell",label:"Bemerkungen aktuell"},
   {key:"total_aktuell",label:"Total aktuell"},{key:"total_vorjahr",label:"Total Vorjahr"},
@@ -81,7 +81,7 @@ const KNOWN_FIELDS=[
   {key:"trans_txt",label:"Transport Text"},{key:"trans_preis",label:"Transport €"},
   {key:"duenger_txt",label:"Dünger Text"},{key:"duenger_preis",label:"Dünger €"},
   {key:"ortsteil",label:"Ortsteil"},{key:"lieferadresse",label:"Lieferadresse"},
-  {key:"kdr",label:"Kdr"},{key:"abholung",label:"Abholung"},
+  {key:"abholung",label:"Abholung"},
   {key:"umtopfarbeiten",label:"Umtopfarbeiten"},{key:"vapiano_pflanzen",label:"Vapiano Pflanzen"},
   {key:"camelia",label:"Camelia"},{key:"zeit_abholung",label:"Zeit Abholung"},
   {key:"mail",label:"Mail"},{key:"ersatzpflanzen",label:"Ersatzpflanzen"},
@@ -148,10 +148,17 @@ const TODAY=new Date().toISOString().split("T")[0];
 function fmt2(n){return isNaN(n)||n===null?"0,00":Number(n).toFixed(2).replace(".",",")}
 function uid(){return Math.random().toString(36).slice(2,10)}
 
+function syncCodeKdr(k){
+  const v=k.code||k.kdr||"";
+  return{...k,code:v,kdr:v};
+}
+
 function mapGaertnereiKunde(g){
   const name=[g.vorname,g.nachname].filter(Boolean).join(" ");
+  const code=String(g.kundennummer||"");
   return{
-    code:String(g.kundennummer||""),
+    code,
+    kdr:code,
     vorname:g.vorname||"",
     firma:g.nachname||name||"",
     email:g.email||"",
@@ -173,7 +180,7 @@ function positionenFromGaertnerei(g){
 const KUNDE_SEARCH_FIELDS=[
   {id:"all",label:"Alle Felder",keys:["firma","vorname","code","ortsteil","ort","plz","strasse","email"]},
   {id:"name",label:"Name",keys:["firma","vorname"]},
-  {id:"code",label:"Kundennummer",keys:["code"]},
+  {id:"code",label:"Kundennummer",keys:["code","kdr"]},
   {id:"ortsteil",label:"Ortsteil",keys:["ortsteil"]},
   {id:"ort",label:"Ort / PLZ",keys:["ort","plz"]},
 ];
@@ -303,9 +310,35 @@ function parseSizeGroups(s){
   return result;
 }
 
+function mergeSizeGroups(groups){
+  const merged=new Map();
+  for(const g of groups){
+    merged.set(g.cm,(merged.get(g.cm)||0)+g.anzahl);
+  }
+  return[...merged.entries()].sort((a,b)=>a[0]-b[0]).map(([cm,anzahl])=>({anzahl,cm}));
+}
+
 function parsePflanzenZeile(text){
   const t=text.trim();
   if(!t)return[];
+
+  const multiParen=t.match(/^(\d+\s+)?(.+?)\s*((?:\([^)]+\)\s*)+)$/);
+  if(multiParen){
+    const name=multiParen[2].trim();
+    const declaredQty=multiParen[1]?parseInt(multiParen[1],10):null;
+    const parenBlocks=[...multiParen[3].matchAll(/\(([^)]+)\)/g)];
+    const blockGroups=parenBlocks.map(m=>parseSizeGroups(m[1])).filter(g=>g.length);
+    if(blockGroups.length){
+      let groups;
+      if(declaredQty&&blockGroups.length>1){
+        const matching=blockGroups.filter(g=>g.reduce((s,x)=>s+x.anzahl,0)===declaredQty);
+        groups=matching.length===1?matching[0]:mergeSizeGroups(blockGroups.flat());
+      }else{
+        groups=mergeSizeGroups(blockGroups.flat());
+      }
+      return groups.map(g=>({art:name,anzahl:g.anzahl,cm:g.cm}));
+    }
+  }
 
   const withParen=t.match(/^(\d+\s+)?(.+?)\s*\(([^)]+)\)\s*$/);
   if(withParen){
@@ -443,7 +476,7 @@ function PositionenEditor({positionen, onChange, formulaMap={}, onFormulaMapChan
           <button onClick={applyQuickEntry} style={{background:"#059669",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",fontSize:10,cursor:"pointer",fontWeight:700,whiteSpace:"nowrap"}}>Einfügen</button>
         </div>
         <div style={{fontSize:9,color:"#64748b",marginTop:4,lineHeight:1.5}}>
-          Formate: <code>4 Oleander (2x130/2x140)</code> · <code>Olivenbaum 180</code> · <code>3 Lavendel 40</code> · mehrere Zeilen möglich
+          Formate: <code>4 Oleander (2x130/2x140)</code> · <code>8 Citrus (60/6x80) (60/80/4x90/2x100)</code> · <code>Olivenbaum 180</code> · mehrere Zeilen möglich
         </div>
         {quickMsg&&<div style={{fontSize:9,color:quickMsg.includes("nicht")?"#b91c1c":"#059669",marginTop:3,fontWeight:600}}>{quickMsg}</div>}
       </div>
@@ -843,7 +876,11 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
   const[showTabOrder,setShowTabOrder]=useState(false);
   const[tabOrder,setTabOrder]=useState(layout.tabOrder||[]);
   const[showPrint,setShowPrint]=useState(false);
-  const set=(k,v)=>onChange({...data,[k]:v});
+  const set=(k,v)=>{
+    if(k==="code")onChange({...data,code:v,kdr:v});
+    else if(k==="kdr")onChange({...data,kdr:v,code:v});
+    else onChange({...data,[k]:v});
+  };
   const setPos=(pos)=>onChange({...data,positionen:pos});
   const setZusatz=(zusatzposten)=>onChange({...data,zusatzposten});
   const pos=data.positionen||[];
@@ -939,7 +976,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
             <input value={data.jahr||YEAR}onChange={e=>set("jahr",e.target.value)}style={{background:"#cc0000",border:"none",color:"#fff",fontWeight:800,fontSize:20,width:60,outline:"none",textAlign:"center"}}/>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:3,flex:1}}>
-            <Row><Lbl t="Restbetrag"/><Inp value={data.restbetrag}onChange={v=>set("restbetrag",v)}style={{width:80}}/><Lbl t="Code"ml={8}/><Inp value={data.code}onChange={v=>set("code",v)}style={{width:90}}/><Lbl t="zugesagt"ml={8}/><input type="checkbox"checked={!!data.zugesagt}onChange={e=>set("zugesagt",e.target.checked)}style={{width:16,height:16,marginTop:3}}/></Row>
+            <Row><Lbl t="Restbetrag"/><Inp value={data.restbetrag}onChange={v=>set("restbetrag",v)}style={{width:80}}/><Lbl t="Code / Kdr"ml={8}/><Inp value={data.code||data.kdr}onChange={v=>set("code",v)}style={{width:90}}/><Lbl t="zugesagt"ml={8}/><input type="checkbox"checked={!!data.zugesagt}onChange={e=>set("zugesagt",e.target.checked)}style={{width:16,height:16,marginTop:3}}/></Row>
             <Row><Lbl t="Auslieferung/Abholung"/><Inp value={data.auslieferung_abholung}onChange={v=>set("auslieferung_abholung",v)}type="date"style={{width:130}}/><Inp value={data.abholung}onChange={v=>set("abholung",v)}style={{...S.yellow,width:80}}/><Lbl t="Umtopfarbeiten"ml={8}/><Inp value={data.umtopfarbeiten}onChange={v=>set("umtopfarbeiten",v)}style={{...S.green,width:100}}/></Row>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:3,marginLeft:"auto"}}>
@@ -969,7 +1006,6 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
           </div>
           <div style={{flex:2,padding:"5px 8px"}}>
             <Row><Lbl t="ausgeliefert am"/><Inp value={data.ausgeliefert_am}onChange={v=>set("ausgeliefert_am",v)}type="date"style={{width:120}}/><Lbl t="Ersatz"ml={6}/><Inp value={data.ersatzpflanzen}onChange={v=>set("ersatzpflanzen",v)}style={{...S.pink,width:80}}/></Row>
-            <Row><Lbl t="Kdr"/><Inp value={data.kdr}onChange={v=>set("kdr",v)}style={{...S.yellow,width:55}}/></Row>
             <Row><button style={{...S.green,border:"none",borderRadius:3,padding:"3px 10px",cursor:"pointer",fontSize:12,fontWeight:700}}>S</button><button style={{background:"#ff8800",color:"#fff",border:"none",borderRadius:3,padding:"3px 10px",cursor:"pointer",fontSize:12,marginLeft:4}}>N</button><Lbl t="TOTAL 2025"ml={10}/><Inp value={data.total_vorjahr}onChange={v=>set("total_vorjahr",v)}style={{...S.yellow,width:55,textAlign:"center"}}/><Lbl t="ALTE CM"ml={6}/><Inp value={data.alte_cm}onChange={v=>set("alte_cm",v)}style={{width:55}}/></Row>
           </div>
         </div>
@@ -1313,7 +1349,7 @@ function Stammblatt({data,schema,onChange,onSave,saving,formulaMap,onFormulaMapC
                           <strong style={{fontSize:10,color:"#555"}}>{s.label}</strong>
                           <div style={{marginTop:2,paddingLeft:4,color:"#333"}}>
                             {s.id==="adresse"&&<span>{data.firma||data.vorname} · {data.strasse} · {data.plz} {data.ort}</span>}
-                            {s.id==="kopf"&&<span>Jahr: {data.jahr} | Code: {data.code} | {data.auslieferung_abholung?"Lieferdatum: "+data.auslieferung_abholung:""}</span>}
+                            {s.id==="kopf"&&<span>Jahr: {data.jahr} | Code/Kdr: {data.code||data.kdr} | {data.auslieferung_abholung?"Lieferdatum: "+data.auslieferung_abholung:""}</span>}
                             {s.id==="bemerkungen_aktuell"&&<span>{data.bemerkungen_aktuell}</span>}
                             {s.id==="positionen"&&<span>{pos.filter(p=>p.art).map(p=>`${p.label}: ${p.art} (${p.cm}cm, ${p.anzahl}x, ${fmt2(p.preis)}€)`).join(" | ")}</span>}
                             {s.id==="transport"&&<span>{data.trans_txt} {data.trans_preis?fmt2(data.trans_preis)+" €":""}</span>}
@@ -1833,7 +1869,7 @@ export default function App(){
       if(DEMO_MODE){
         const pos=_positionen[id]||[];
         const filled=LABELS.map(l=>pos.find(pp=>pp.label===l)||{label:l,art:"",cm:"",preis:"",anzahl:""});
-        const base=_kunden.find(k=>k.id===id)||{};
+        const base=syncCodeKdr(_kunden.find(k=>k.id===id)||{});
         setActiveData({...base,positionen:filled,felder:{}});
         setActiveId(id);
         return;
@@ -1850,7 +1886,7 @@ export default function App(){
       (f.data||[]).forEach(r=>{felder[r.feld_id]=r.wert});
       const pos=p.data||[];
       const filled=LABELS.map(l=>pos.find(pp=>pp.label===l)||{label:l,art:"",cm:"",preis:"",anzahl:""});
-      setActiveData({...kRes.data,positionen:filled,felder});
+      setActiveData({...syncCodeKdr(kRes.data),positionen:filled,felder});
       setActiveId(id);
     }catch(e){setErr(e.message)}
     finally{setLoading(false)}
@@ -1917,42 +1953,43 @@ export default function App(){
     setSaving(true);setErr(null);
     try{
       const{positionen,felder,...rest}=activeData;
+      const synced=syncCodeKdr(rest);
       if(DEMO_MODE){
-        if(!rest.id)rest.id=uid();
-        const idx=_kunden.findIndex(k=>k.id===rest.id);
-        if(idx>=0)_kunden[idx]={..._kunden[idx],...rest};else _kunden.push(rest);
-        _positionen[rest.id]=positionen.filter(p=>p.art||p.cm||effectivePreis(p,formulaMap,preisPro10cm));
+        if(!synced.id)synced.id=uid();
+        const idx=_kunden.findIndex(k=>k.id===synced.id);
+        if(idx>=0)_kunden[idx]={..._kunden[idx],...synced};else _kunden.push(synced);
+        _positionen[synced.id]=positionen.filter(p=>p.art||p.cm||effectivePreis(p,formulaMap,preisPro10cm));
         setKunden([..._kunden]);
-        setActiveId(rest.id);
+        setActiveId(synced.id);
         return;
       }
       const c=sbRef.current;
-      const id=rest.id;
+      const id=synced.id;
       if(id){
-        const{error}=await c.from(T.kunden).update(rest).eq("id",id);
+        const{error}=await c.from(T.kunden).update(synced).eq("id",id);
         if(error)throw error;
       }else{
-        const{data,error}=await c.from(T.kunden).insert(rest).select().single();
+        const{data,error}=await c.from(T.kunden).insert(synced).select().single();
         if(error)throw error;
-        rest.id=data.id;
+        synced.id=data.id;
         setKunden(prev=>[...prev,data]);
         setActiveId(data.id);
       }
       await Promise.all([
         (async()=>{
-          await c.from(T.positionen).delete().eq("kunde_id",rest.id);
+          await c.from(T.positionen).delete().eq("kunde_id",synced.id);
           const rows=positionen.filter(p=>p.art||p.cm||effectivePreis(p,formulaMap,preisPro10cm)).map((p,i)=>{
             const preisVal=effectivePreis(p,formulaMap,preisPro10cm);
-            return{kunde_id:rest.id,label:p.label,sort_order:i,art:p.art||null,anzahl:p.anzahl||null,cm:p.cm?parseFloat(p.cm):null,preis:preisVal||null};
+            return{kunde_id:synced.id,label:p.label,sort_order:i,art:p.art||null,anzahl:p.anzahl||null,cm:p.cm?parseFloat(p.cm):null,preis:preisVal||null};
           });
           if(rows.length){const{error}=await c.from(T.positionen).insert(rows);if(error)throw error}
         })(),
         (async()=>{
-          const rows=Object.entries(felder||{}).filter(([,v])=>v!==undefined&&v!=="").map(([feld_id,wert])=>({kunde_id:rest.id,feld_id,wert:String(wert)}));
+          const rows=Object.entries(felder||{}).filter(([,v])=>v!==undefined&&v!=="").map(([feld_id,wert])=>({kunde_id:synced.id,feld_id,wert:String(wert)}));
           if(rows.length){const{error}=await c.from(T.kunden_felder).upsert(rows,{onConflict:"kunde_id,feld_id"});if(error)throw error}
         })(),
       ]);
-      setKunden(prev=>prev.map(k=>k.id===rest.id?{...k,...rest}:k));
+      setKunden(prev=>prev.map(k=>k.id===synced.id?{...k,...synced}:k));
     }catch(e){setErr("Fehler: "+e.message)}
     finally{setSaving(false)}
   };
